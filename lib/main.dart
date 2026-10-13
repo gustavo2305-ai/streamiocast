@@ -16,7 +16,7 @@ class ChromecastStremioApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Central Chromecast 2015',
+      title: 'Central Chromecast 2015 v2',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF090D16),
@@ -32,19 +32,72 @@ class ChromecastStremioApp extends StatelessWidget {
 }
 
 // ============================================================================
-// MOTOR NATIVO CASTV2 (TLS PORTA 8009) — RODA NO ANDROID E NO WINDOWS
+// MICRO-SERVIDOR HTTP LOCAL PARA SERVIR LEGENDAS (.SRT -> .VTT COM CORS)
 // ============================================================================
+class LocalSubtitleServer {
+  HttpServer? _server;
+  String _currentVtt = 'WEBVTT\n\n';
+
+  int get port => _server?.port ?? 0;
+
+  Future<void> ensureStarted() async {
+    if (_server != null) return;
+    _server = await HttpServer.bind(InternetAddress.anyIPv4, 0);
+    _server!.listen((HttpRequest req) {
+      req.response.headers.add('Access-Control-Allow-Origin', '*');
+      req.response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS');
+      req.response.headers.add('Access-Control-Allow-Headers', '*');
+      req.response.headers.contentType = ContentType('text', 'vtt', charset: 'utf-8');
+      req.response.write(_currentVtt);
+      req.response.close();
+    });
+  }
+
+  String srtToWebVtt(String raw) {
+    var txt = raw.replaceAll('\r\n', '\n').replaceAll('\r', '\n').replaceFirst('\uFEFF', '');
+    if (txt.trimLeft().startsWith('WEBVTT')) return txt;
+    // Converte timestamps SRT (00:01:20,500) para WebVTT (00:01:20.500)
+    final reg = RegExp(r'(\d{2}:\d{2}:\d{2}),(\d{3})');
+    txt = txt.replaceAllMapped(reg, (m) => '${m.group(1)}.${m.group(2)}');
+    return 'WEBVTT\n\n$txt';
+  }
+
+  Future<String> hostSubtitleFromUrl(String subUrl, String localIp) async {
+    await ensureStarted();
+    final res = await http.get(Uri.parse(subUrl)).timeout(const Duration(seconds: 10));
+    final decoded = utf8.decode(res.bodyBytes, allowMalformed: true);
+    _currentVtt = srtToWebVtt(decoded);
+    return 'http://$localIp:$port/sub_${DateTime.now().millisecondsSinceEpoch}.vtt';
+  }
+}
+
+// ============================================================================
+// MOTOR CASTV2 (PORTA 8009) COM SUPORTE A LEGENDAS E FAIXAS DE ÁUDIO
+// ============================================================================
+class CastTrack {
+  final int trackId;
+  final String type; // 'AUDIO' ou 'TEXT'
+  final String name;
+  final String language;
+
+  CastTrack({required this.trackId, required this.type, required this.name, required this.language});
+}
+
 class CastV2Client {
   SecureSocket? _socket;
   String? _transportId;
   int? _mediaSessionId;
   int _reqId = 1;
   final List<int> _buffer = [];
+  List<CastTrack> availableTracks = [];
+  List<int> activeTrackIds = [];
+
   final void Function(String) onStatus;
+  final VoidCallback onTracksChanged;
 
-  CastV2Client({required this.onStatus});
+  CastV2Client({required this.onStatus, required this.onTracksChanged});
 
-  bool get isConnected => _socket != null;
+  String get localLanIp => _socket?.address.address ?? '127.0.0.1';
 
   List<int> _encodeVarint(int value) {
     final out = <int>[];
@@ -67,11 +120,11 @@ class CastV2Client {
     if (_socket == null) return;
     final jsonStr = jsonEncode(payload);
     final body = <int>[
-      0x08, 0x00, // protocol_version = 0 (CASTV2_1_0)
+      0x08, 0x00,
       ..._encodeStringField(2, sourceId),
       ..._encodeStringField(3, destId),
       ..._encodeStringField(4, namespace),
-      0x28, 0x00, // payload_type = 0 (STRING)
+      0x28, 0x00,
       ..._encodeStringField(6, jsonStr),
     ];
     final len = body.length;
@@ -103,7 +156,6 @@ class CastV2Client {
       },
     );
 
-    // 1. Conecta ao receiver-0 e lança o Default Media Receiver (CC1AD845)
     _sendProto('sender-0', 'receiver-0', 'urn:x-cast:com.google.cast.tp.connection', {'type': 'CONNECT'});
     _sendProto('sender-0', 'receiver-0', 'urn:x-cast:com.google.cast.receiver', {
       'type': 'LAUNCH',
@@ -125,7 +177,6 @@ class CastV2Client {
   }
 
   void _parsePacket(List<int> bytes) {
-    // Extrai strings UTF-8 do pacote Protobuf (namespace e payload JSON)
     final rawText = utf8.decode(bytes, allowMalformed: true);
     if (rawText.contains('"type":"PING"')) {
       _sendProto('sender-0', 'receiver-0', 'urn:x-cast:com.google.cast.tp.heartbeat', {'type': 'PONG'});
@@ -149,17 +200,39 @@ class CastV2Client {
       } else if (type == 'MEDIA_STATUS') {
         final stList = data['status'] as List?;
         if (stList != null && stList.isNotEmpty) {
-          _mediaSessionId = stList[0]['mediaSessionId'] as int?;
+          final st = stList[0] as Map<String, dynamic>;
+          _mediaSessionId = st['mediaSessionId'] as int?;
+          final active = (st['activeTrackIds'] as List?)?.map((e) => (e as num).toInt()).toList() ?? [];
+          activeTrackIds = active;
+
+          final rawTracks = st['media']?['tracks'] as List?;
+          if (rawTracks != null) {
+            availableTracks = rawTracks.map((t) {
+              return CastTrack(
+                trackId: (t['trackId'] as num).toInt(),
+                type: (t['type'] ?? '').toString(),
+                name: (t['name'] ?? t['language'] ?? 'Faixa ${t['trackId']}').toString(),
+                language: (t['language'] ?? '').toString(),
+              );
+            }).toList();
+          }
+          onTracksChanged();
         }
       }
     } catch (_) {}
   }
 
-  Future<void> loadMedia(String ip, String url, String title, {String poster = ''}) async {
+  Future<void> loadMedia(
+    String ip,
+    String url,
+    String title, {
+    String poster = '',
+    String? vttSubtitleUrl,
+    String subtitleLangLabel = 'Português (Brasil)',
+  }) async {
     if (_socket == null) {
       await connect(ip);
     }
-    // Garante que o Default Media Receiver (CC1AD845) está aberto e com transportId
     if (_transportId == null) {
       _sendProto('sender-0', 'receiver-0', 'urn:x-cast:com.google.cast.receiver', {
         'type': 'LAUNCH',
@@ -172,15 +245,40 @@ class CastV2Client {
     _sendProto('sender-0', target, 'urn:x-cast:com.google.cast.tp.connection', {'type': 'CONNECT'});
 
     final isHls = url.toLowerCase().contains('.m3u8');
+    final tracks = <Map<String, dynamic>>[];
+    final activeIds = <int>[];
+
+    if (vttSubtitleUrl != null && vttSubtitleUrl.isNotEmpty) {
+      tracks.add({
+        'trackId': 1,
+        'type': 'TEXT',
+        'trackContentId': vttSubtitleUrl,
+        'trackContentType': 'text/vtt',
+        'name': subtitleLangLabel,
+        'language': 'pt-BR',
+        'subtype': 'SUBTITLES',
+      });
+      activeIds.add(1);
+    }
+
     _sendProto('sender-0', target, 'urn:x-cast:com.google.cast.media', {
       'type': 'LOAD',
       'requestId': _reqId++,
       'autoplay': true,
       'currentTime': 0,
+      if (activeIds.isNotEmpty) 'activeTrackIds': activeIds,
       'media': {
         'contentId': url,
         'contentType': isHls ? 'application/x-mpegURL' : 'video/mp4',
         'streamType': isHls ? 'LIVE' : 'BUFFERED',
+        if (tracks.isNotEmpty) 'tracks': tracks,
+        'textTrackStyle': {
+          'backgroundColor': '#00000080',
+          'foregroundColor': '#FFFFFFFF',
+          'edgeType': 'OUTLINE',
+          'edgeColor': '#000000FF',
+          'fontScale': 1.15,
+        },
         'metadata': {
           'metadataType': 0,
           'title': title,
@@ -188,14 +286,28 @@ class CastV2Client {
         },
       },
     });
-    onStatus('Tocando na TV: $title');
+    onStatus('Tocando na TV: $title ${vttSubtitleUrl != null ? "(Com Legenda)" : ""}');
   }
 
-  void sendMediaCmd(String type) {
+  void setActiveTracks(List<int> trackIds) {
+    if (_socket == null || _transportId == null) return;
+    activeTrackIds = trackIds;
+    _sendProto('sender-0', _transportId!, 'urn:x-cast:com.google.cast.media', {
+      'type': 'EDIT_TRACKS_INFO',
+      'mediaSessionId': _mediaSessionId ?? 1,
+      'activeTrackIds': trackIds,
+      'requestId': _reqId++,
+    });
+    onStatus('Idioma / Legenda atualizado na TV!');
+    onTracksChanged();
+  }
+
+  void sendMediaCmd(String type, {double? seekTime}) {
     if (_socket == null || _transportId == null) return;
     _sendProto('sender-0', _transportId!, 'urn:x-cast:com.google.cast.media', {
       'type': type,
       'mediaSessionId': _mediaSessionId ?? 1,
+      if (seekTime != null) 'currentTime': seekTime,
       'requestId': _reqId++,
     });
     onStatus('Comando enviado: $type');
@@ -220,7 +332,7 @@ class CastV2Client {
 }
 
 // ============================================================================
-// MODELOS E INTERFACE PRINCIPAL (ROLAGEM VIRTUAL 60 FPS + STREMIO + M3U8)
+// MODELOS E INTERFACE PRINCIPAL
 // ============================================================================
 class ChannelItem {
   final String name;
@@ -253,7 +365,8 @@ class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _addonUrlCtrl = TextEditingController();
 
   late CastV2Client _cast;
-  String _status = 'Pronto! Conecte ao Chromecast ou escolha um canal.';
+  final LocalSubtitleServer _subServer = LocalSubtitleServer();
+  String _status = 'Pronto! Conecte ao Chromecast ou escolha um título.';
   double _volume = 0.8;
 
   List<ChannelItem> _allChannels = [
@@ -273,9 +386,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _selectedGroup = 'Todos';
   String _searchQuery = '';
+  String _audioFilter = 'Todos'; // 'Todos', 'Dublado', 'Original'
+
   List<Map<String, dynamic>> _stremioAddons = [
     {'name': 'Cinemeta', 'baseUrl': 'https://v3-cinemeta.strem.io'},
-    {'name': 'Torrentio', 'baseUrl': 'https://torrentio.strem.fun'},
+    {'name': 'Torrentio (Prioridade PT-BR)', 'baseUrl': 'https://torrentio.strem.fun/language=portuguese'},
+    {'name': 'OpenSubtitles v3', 'baseUrl': 'https://opensubtitles-v3.strem.io'},
   ];
   List<dynamic> _stremioMetas = [];
   String _stremioType = 'movie';
@@ -283,9 +399,15 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _cast = CastV2Client(onStatus: (msg) {
-      if (mounted) setState(() => _status = msg);
-    });
+    _cast = CastV2Client(
+      onStatus: (msg) {
+        if (mounted) setState(() => _status = msg);
+      },
+      onTracksChanged: () {
+        if (mounted) setState(() {});
+      },
+    );
+    _subServer.ensureStarted();
     _loadSavedData();
     _fetchStremioCatalog();
   }
@@ -308,7 +430,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _saveChannels() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('cast_ip', _ipCtrl.text.trim());
-    // Salva até 5.000 canais localmente no aparelho
     final subset = _allChannels.take(5000).map((e) => e.toJson()).toList();
     await prefs.setString('channels_json', jsonEncode(subset));
   }
@@ -390,63 +511,347 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _showStremioStreams(String type, String id, String title, String poster) async {
+  // ==========================================================================
+  // PASSO 1: SE FOR SÉRIE, ABRE SELETOR DE TEMPORADA E EPISÓDIO
+  // ==========================================================================
+  Future<void> _openMediaItem(String type, String id, String title, String poster) async {
+    if (type == 'series') {
+      await _showSeriesSeasonEpisodePicker(id, title, poster);
+    } else {
+      await _showStreamsAndSubtitlesPicker(type, id, title, poster);
+    }
+  }
+
+  Future<void> _showSeriesSeasonEpisodePicker(String seriesId, String seriesTitle, String poster) async {
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: const Color(0xFF151E32),
       builder: (ctx) {
-        return FutureBuilder<List<Map<String, String>>>(
-          future: () async {
-            final found = <Map<String, String>>[];
-            for (final a in _stremioAddons) {
-              try {
-                final u = '${a['baseUrl']}/stream/$type/${Uri.encodeComponent(id)}.json';
-                final r = await http.get(Uri.parse(u)).timeout(const Duration(seconds: 7));
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.85,
+          builder: (ctx, scrollCtrl) {
+            return FutureBuilder<Map<int, List<Map<String, dynamic>>>>(
+              future: () async {
+                final bySeason = <int, List<Map<String, dynamic>>>{};
+                final u = 'https://v3-cinemeta.strem.io/meta/series/${Uri.encodeComponent(seriesId)}.json';
+                final r = await http.get(Uri.parse(u)).timeout(const Duration(seconds: 10));
                 if (r.statusCode == 200) {
-                  final list = jsonDecode(r.body)['streams'] as List? ?? [];
-                  for (final s in list) {
-                    if (s['url'] != null) {
-                      found.add({
-                        'addon': a['name'].toString(),
-                        'title': (s['title'] ?? s['name'] ?? 'Stream HTTP').toString(),
-                        'url': s['url'].toString(),
-                      });
-                    }
+                  final videos = jsonDecode(r.body)['meta']?['videos'] as List? ?? [];
+                  for (final v in videos) {
+                    final sNum = (v['season'] as num?)?.toInt() ?? 1;
+                    if (sNum == 0) continue; // Ignora especiais (season 0) por padrão
+                    bySeason.putIfAbsent(sNum, () => []).add(Map<String, dynamic>.from(v));
                   }
                 }
-              } catch (_) {}
-            }
-            return found;
-          }(),
-          builder: (ctx, snap) {
-            if (!snap.hasData) {
-              return const Padding(
-                padding: EdgeInsets.all(24),
-                child: Center(child: CircularProgressIndicator()),
-              );
-            }
-            final streams = snap.data!;
-            if (streams.isEmpty) {
-              return Padding(
-                padding: const EdgeInsets.all(20),
-                child: Text('Nenhum stream HTTP direto encontrado para $title ($id). Use um add-on HTTP ou a aba de Canais M3U8.'),
-              );
-            }
-            return ListView.builder(
-              itemCount: streams.length,
-              itemBuilder: (ctx, i) {
-                final st = streams[i];
-                return ListTile(
-                  title: Text(st['addon']!),
-                  subtitle: Text(st['title']!),
-                  trailing: ElevatedButton.icon(
-                    icon: const Icon(Icons.cast),
-                    label: const Text('Tocar na TV'),
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      _cast.loadMedia(_ipCtrl.text, st['url']!, title, poster: poster);
-                    },
-                  ),
+                for (final k in bySeason.keys) {
+                  bySeason[k]!.sort((a, b) => ((a['episode'] as num?) ?? 0).compareTo((b['episode'] as num?) ?? 0));
+                }
+                return bySeason;
+              }(),
+              builder: (ctx, snap) {
+                if (!snap.hasData) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                final seasonsMap = snap.data!;
+                final seasonNumbers = seasonsMap.keys.toList()..sort();
+                if (seasonNumbers.isEmpty) {
+                  return const Center(child: Text('Nenhum episódio encontrado para esta série.'));
+                }
+                int selectedSeason = seasonNumbers.first;
+
+                return StatefulBuilder(
+                  builder: (ctx, setModalState) {
+                    final episodes = seasonsMap[selectedSeason] ?? [];
+                    return Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  seriesTitle,
+                                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              DropdownButton<int>(
+                                value: selectedSeason,
+                                dropdownColor: const Color(0xFF090D16),
+                                items: seasonNumbers
+                                    .map((s) => DropdownMenuItem(value: s, child: Text('Temporada $s')))
+                                    .toList(),
+                                onChanged: (val) {
+                                  if (val != null) setModalState(() => selectedSeason = val);
+                                },
+                              ),
+                            ],
+                          ),
+                          const Divider(),
+                          Expanded(
+                            child: ListView.builder(
+                              controller: scrollCtrl,
+                              itemCount: episodes.length,
+                              itemBuilder: (ctx, i) {
+                                final ep = episodes[i];
+                                final epNum = ep['episode'] ?? (i + 1);
+                                final epName = (ep['name'] ?? ep['title'] ?? 'Episódio $epNum').toString();
+                                final epId = (ep['id'] ?? '$seriesId:$selectedSeason:$epNum').toString();
+                                return Card(
+                                  color: const Color(0xFF090D16),
+                                  child: ListTile(
+                                    leading: CircleAvatar(
+                                      backgroundColor: const Color(0xFF7C3AED),
+                                      child: Text('E$epNum', style: const TextStyle(fontSize: 12)),
+                                    ),
+                                    title: Text('T${selectedSeason}E$epNum - $epName', style: const TextStyle(fontWeight: FontWeight.bold)),
+                                    subtitle: ep['overview'] != null
+                                        ? Text(ep['overview'].toString(), maxLines: 2, overflow: TextOverflow.ellipsis)
+                                        : null,
+                                    trailing: const Icon(Icons.chevron_right),
+                                    onTap: () {
+                                      Navigator.pop(ctx);
+                                      _showStreamsAndSubtitlesPicker(
+                                        'series',
+                                        epId,
+                                        '$seriesTitle - T${selectedSeason}E$epNum',
+                                        poster,
+                                      );
+                                    },
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // ==========================================================================
+  // PASSO 2: SELETOR DE IDIOMA (DUBLADO/ORIGINAL), LEGENDA PT-BR E FONTES
+  // ==========================================================================
+  Future<void> _showStreamsAndSubtitlesPicker(String type, String videoId, String title, String poster) async {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF151E32),
+      builder: (ctx) {
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.85,
+          builder: (ctx, scrollCtrl) {
+            return FutureBuilder<Map<String, dynamic>>(
+              future: () async {
+                final streams = <Map<String, dynamic>>[];
+                final subtitles = <Map<String, String>>[];
+
+                // 1. Busca streams em todos os add-ons instalados
+                for (final a in _stremioAddons) {
+                  try {
+                    final u = '${a['baseUrl']}/stream/$type/${Uri.encodeComponent(videoId)}.json';
+                    final r = await http.get(Uri.parse(u)).timeout(const Duration(seconds: 8));
+                    if (r.statusCode == 200) {
+                      final list = jsonDecode(r.body)['streams'] as List? ?? [];
+                      for (final s in list) {
+                        final directUrl = s['url']?.toString();
+                        final infoHash = s['infoHash']?.toString();
+                        final fileIdx = s['fileIdx'] ?? 0;
+                        final desc = '${s['name'] ?? ''} ${s['title'] ?? ''}'.trim();
+                        final upper = desc.toUpperCase();
+                        final isPtBr = upper.contains('DUBLADO') ||
+                            upper.contains('DUAL') ||
+                            upper.contains('PT-BR') ||
+                            upper.contains('PORTUGUES') ||
+                            upper.contains('🇧🇷') ||
+                            upper.contains('🇵🇹');
+
+                        String? playable = directUrl;
+                        bool isTorrent = false;
+                        if ((playable == null || playable.isEmpty) && infoHash != null) {
+                          // Usa o Stremio Server se estiver aberto na rede local (:11470)
+                          playable = 'http://${_cast.localLanIp}:11470/$infoHash/$fileIdx';
+                          isTorrent = true;
+                        }
+                        if (playable != null && playable.isNotEmpty) {
+                          streams.add({
+                            'addon': a['name'].toString(),
+                            'title': desc,
+                            'url': playable,
+                            'isPtBr': isPtBr,
+                            'isTorrent': isTorrent,
+                          });
+                        }
+                      }
+                    }
+                  } catch (_) {}
+                }
+
+                // Ordena colocando streams Dublados / Dual PT-BR no topo
+                streams.sort((a, b) => (b['isPtBr'] ? 1 : 0).compareTo(a['isPtBr'] ? 1 : 0));
+
+                // 2. Busca legendas no OpenSubtitles v3
+                try {
+                  final subUrl = 'https://opensubtitles-v3.strem.io/subtitles/$type/${Uri.encodeComponent(videoId)}.json';
+                  final sr = await http.get(Uri.parse(subUrl)).timeout(const Duration(seconds: 8));
+                  if (sr.statusCode == 200) {
+                    final rawSubs = jsonDecode(sr.body)['subtitles'] as List? ?? [];
+                    for (final sub in rawSubs) {
+                      final lang = (sub['lang'] ?? '').toString().toLowerCase();
+                      final u = (sub['url'] ?? '').toString();
+                      if (u.isEmpty) continue;
+                      String label = lang;
+                      int priority = 3;
+                      if (lang.contains('pob') || lang.contains('pt') || lang.contains('por') || lang.contains('bra')) {
+                        label = '🇧🇷 Português ($lang)';
+                        priority = 0;
+                      } else if (lang.contains('eng')) {
+                        label = '🇺🇸 Inglês ($lang)';
+                        priority = 1;
+                      } else if (lang.contains('spa') || lang.contains('es')) {
+                        label = '🇪🇸 Espanhol ($lang)';
+                        priority = 2;
+                      }
+                      subtitles.add({'label': label, 'url': u, 'priority': priority.toString()});
+                    }
+                    subtitles.sort((a, b) => a['priority']!.compareTo(b['priority']!));
+                  }
+                } catch (_) {}
+
+                return {'streams': streams, 'subtitles': subtitles};
+              }(),
+              builder: (ctx, snap) {
+                if (!snap.hasData) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                final allStreams = snap.data!['streams'] as List<Map<String, dynamic>>;
+                final allSubs = snap.data!['subtitles'] as List<Map<String, String>>;
+                String selectedSubUrl = allSubs.isNotEmpty && allSubs.first['priority'] == '0'
+                    ? allSubs.first['url']!
+                    : '';
+
+                return StatefulBuilder(
+                  builder: (ctx, setModalState) {
+                    final filteredStreams = allStreams.where((s) {
+                      if (_audioFilter == 'Dublado') return s['isPtBr'] == true;
+                      if (_audioFilter == 'Original') return s['isPtBr'] == false;
+                      return true;
+                    }).toList();
+
+                    return Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 10),
+                          // SELETOR DE LEGENDA E FILTRO DE ÁUDIO
+                          Row(
+                            children: [
+                              Expanded(
+                                child: DropdownButtonFormField<String>(
+                                  value: _audioFilter,
+                                  decoration: const InputDecoration(labelText: 'Filtro de Áudio', isDense: true),
+                                  items: const [
+                                    DropdownMenuItem(value: 'Todos', child: Text('🎧 Todos os Áudios')),
+                                    DropdownMenuItem(value: 'Dublado', child: Text('🇧🇷 Dublado / Dual PT-BR')),
+                                    DropdownMenuItem(value: 'Original', child: Text('🇺🇸 Áudio Original')),
+                                  ],
+                                  onChanged: (v) => setModalState(() => _audioFilter = v ?? 'Todos'),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: DropdownButtonFormField<String>(
+                                  value: selectedSubUrl,
+                                  decoration: const InputDecoration(labelText: 'Legenda (OpenSubtitles)', isDense: true),
+                                  items: [
+                                    const DropdownMenuItem(value: '', child: Text('Sem Legenda')),
+                                    ...allSubs.take(30).map((s) => DropdownMenuItem(
+                                          value: s['url']!,
+                                          child: Text(s['label']!, overflow: TextOverflow.ellipsis),
+                                        )),
+                                  ],
+                                  onChanged: (v) => setModalState(() => selectedSubUrl = v ?? ''),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const Divider(height: 20),
+                          Expanded(
+                            child: filteredStreams.isEmpty
+                                ? const Center(
+                                    child: Text('Nenhuma fonte encontrada com este filtro de idioma. Mude para "Todos os Áudios".'),
+                                  )
+                                : ListView.builder(
+                                    controller: scrollCtrl,
+                                    itemCount: filteredStreams.length,
+                                    itemBuilder: (ctx, i) {
+                                      final st = filteredStreams[i];
+                                      final isPt = st['isPtBr'] == true;
+                                      return Card(
+                                        color: const Color(0xFF090D16),
+                                        child: ListTile(
+                                          title: Row(
+                                            children: [
+                                              if (isPt)
+                                                Container(
+                                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                  margin: const EdgeInsets.only(right: 6),
+                                                  decoration: BoxDecoration(
+                                                    color: const Color(0xFF059669),
+                                                    borderRadius: BorderRadius.circular(4),
+                                                  ),
+                                                  child: const Text('🇧🇷 PT-BR / DUAL', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                                                ),
+                                              Expanded(child: Text(st['addon'].toString(), style: const TextStyle(fontWeight: FontWeight.bold))),
+                                            ],
+                                          ),
+                                          subtitle: Text(st['title'].toString()),
+                                          trailing: ElevatedButton.icon(
+                                            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF7C3AED)),
+                                            icon: const Icon(Icons.cast),
+                                            label: const Text('TV'),
+                                            onPressed: () async {
+                                              Navigator.pop(ctx);
+                                              String? hostedVtt;
+                                              if (selectedSubUrl.isNotEmpty) {
+                                                setState(() => _status = 'Convertendo legenda para WebVTT...');
+                                                try {
+                                                  if (!_cast.isConnected) await _cast.connect(_ipCtrl.text);
+                                                  hostedVtt = await _subServer.hostSubtitleFromUrl(selectedSubUrl, _cast.localLanIp);
+                                                } catch (_) {}
+                                              }
+                                              await _cast.loadMedia(
+                                                _ipCtrl.text,
+                                                st['url'].toString(),
+                                                title,
+                                                poster: poster,
+                                                vttSubtitleUrl: hostedVtt,
+                                              );
+                                            },
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
                 );
               },
             );
@@ -465,6 +870,9 @@ class _HomeScreenState extends State<HomeScreen> {
       return matchGroup && matchSearch;
     }).toList();
 
+    final audioTracks = _cast.availableTracks.where((t) => t.type == 'AUDIO').toList();
+    final textTracks = _cast.availableTracks.where((t) => t.type == 'TEXT').toList();
+
     return DefaultTabController(
       length: 3,
       child: Scaffold(
@@ -474,8 +882,8 @@ class _HomeScreenState extends State<HomeScreen> {
           bottom: const TabBar(
             tabs: [
               Tab(icon: Icon(Icons.live_tv), text: 'Canais M3U8'),
-              Tab(icon: Icon(Icons.movie), text: 'Catálogo Stremio'),
-              Tab(icon: Icon(Icons.settings_remote), text: 'Controle & Listas'),
+              Tab(icon: Icon(Icons.movie), text: 'Filmes & Séries'),
+              Tab(icon: Icon(Icons.subtitles), text: 'Controle & Idioma'),
             ],
           ),
         ),
@@ -490,7 +898,7 @@ class _HomeScreenState extends State<HomeScreen> {
             Expanded(
               child: TabBarView(
                 children: [
-                  // ABA 1: CANAIS M3U8 COM ROLAGEM VIRTUAL (60 FPS PARA MILHARES DE CANAIS)
+                  // ABA 1: CANAIS M3U8
                   Column(
                     children: [
                       Padding(
@@ -511,7 +919,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               child: TextField(
                                 controller: _searchCtrl,
                                 decoration: const InputDecoration(
-                                  labelText: 'Buscar canal (ex: Globo, Cultura, SporTV)...',
+                                  labelText: 'Buscar canal...',
                                   prefixIcon: Icon(Icons.search),
                                   isDense: true,
                                 ),
@@ -546,7 +954,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
 
-                  // ABA 2: CATÁLOGO STREMIO
+                  // ABA 2: FILMES & SÉRIES (COM ESCOLHA DE TEMPORADA, EPISÓDIO, ÁUDIO E LEGENDA)
                   Column(
                     children: [
                       Padding(
@@ -556,8 +964,8 @@ class _HomeScreenState extends State<HomeScreen> {
                             DropdownButton<String>(
                               value: _stremioType,
                               items: const [
-                                DropdownMenuItem(value: 'movie', child: Text('Filmes')),
-                                DropdownMenuItem(value: 'series', child: Text('Séries')),
+                                DropdownMenuItem(value: 'movie', child: Text('🎬 Filmes')),
+                                DropdownMenuItem(value: 'series', child: Text('📺 Séries (Temporadas)')),
                               ],
                               onChanged: (v) {
                                 setState(() => _stremioType = v ?? 'movie');
@@ -567,7 +975,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             const SizedBox(width: 10),
                             Expanded(
                               child: TextField(
-                                decoration: const InputDecoration(hintText: 'Buscar no Stremio...', isDense: true),
+                                decoration: const InputDecoration(hintText: 'Buscar filme ou série...', isDense: true),
                                 onSubmitted: (v) => _fetchStremioCatalog(search: v),
                               ),
                             ),
@@ -589,8 +997,9 @@ class _HomeScreenState extends State<HomeScreen> {
                             final name = (m['name'] ?? 'Título').toString();
                             final poster = (m['poster'] ?? '').toString();
                             final id = (m['id'] ?? '').toString();
+                            final itemType = (m['type'] ?? _stremioType).toString();
                             return InkWell(
-                              onTap: () => _showStremioStreams(_stremioType, id, name, poster),
+                              onTap: () => _openMediaItem(itemType, id, name, poster),
                               child: Card(
                                 clipBehavior: Clip.antiAlias,
                                 child: Column(
@@ -615,11 +1024,11 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
 
-                  // ABA 3: CONTROLE REMOTO & IMPORTAÇÃO DE LISTAS DO BRASIL E ADD-ONS
+                  // ABA 3: CONTROLE REMOTO + TROCA DE ÁUDIO/LEGENDA AO VIVO NA TV
                   ListView(
                     padding: const EdgeInsets.all(16),
                     children: [
-                      const Text('1. Conexão & Controle Remoto da TV', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      const Text('1. Conexão & Controle da TV', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                       const SizedBox(height: 8),
                       Row(
                         children: [
@@ -663,8 +1072,56 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         ],
                       ),
-                      const Divider(height: 30),
-                      const Text('2. Carregar Canais do Brasil em 1 Toque', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      const Divider(height: 28),
+                      const Text('2. Trocar Faixa de Áudio / Legenda do Vídeo Atual na TV', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 8),
+                      if (audioTracks.isEmpty && textTracks.isEmpty)
+                        const Text('Inicie um vídeo com múltiplas faixas ou legenda para alternar o idioma aqui em tempo real.', style: TextStyle(color: Colors.grey))
+                      else ...[
+                        if (audioTracks.isNotEmpty) ...[
+                          const Text('Faixas de Áudio Disponíveis no Vídeo:', style: TextStyle(fontWeight: FontWeight.w600)),
+                          Wrap(
+                            spacing: 8,
+                            children: audioTracks
+                                .map((t) => ChoiceChip(
+                                      label: Text('🎧 ${t.name} (${t.language})'),
+                                      selected: _cast.activeTrackIds.contains(t.trackId),
+                                      onSelected: (_) {
+                                        final others = _cast.activeTrackIds.where((id) => !audioTracks.any((a) => a.trackId == id)).toList();
+                                        _cast.setActiveTracks([...others, t.trackId]);
+                                      },
+                                    ))
+                                .toList(),
+                          ),
+                        ],
+                        if (textTracks.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          const Text('Legendas Carregadas na TV:', style: TextStyle(fontWeight: FontWeight.w600)),
+                          Wrap(
+                            spacing: 8,
+                            children: [
+                              ChoiceChip(
+                                label: const Text('Desativar Legenda'),
+                                selected: !_cast.activeTrackIds.any((id) => textTracks.any((t) => t.trackId == id)),
+                                onSelected: (_) {
+                                  final onlyAudio = _cast.activeTrackIds.where((id) => !textTracks.any((t) => t.trackId == id)).toList();
+                                  _cast.setActiveTracks(onlyAudio);
+                                },
+                              ),
+                              ...textTracks.map((t) => ChoiceChip(
+                                    label: Text('💬 ${t.name}'),
+                                    selected: _cast.activeTrackIds.contains(t.trackId),
+                                    onSelected: (_) {
+                                      final onlyAudio = _cast.activeTrackIds.where((id) => !textTracks.any((tx) => tx.trackId == id)).toList();
+                                      _cast.setActiveTracks([...onlyAudio, t.trackId]);
+                                    },
+                                  )),
+                            ],
+                          ),
+                        ],
+                      ],
+                      const Divider(height: 28),
+                      const Text('3. Carregar Listas de Canais do Brasil (.M3U8)', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                       const SizedBox(height: 8),
                       Wrap(
                         spacing: 8,
@@ -672,15 +1129,15 @@ class _HomeScreenState extends State<HomeScreen> {
                         children: [
                           ElevatedButton(
                             onPressed: () => _importM3uFromUrl('https://iptv-org.github.io/iptv/countries/br.m3u', 'Brasil Aberta'),
-                            child: const Text('🇧🇷 Carregar IPTV-org Brasil'),
+                            child: const Text('🇧🇷 IPTV-org Brasil'),
                           ),
                           ElevatedButton(
                             onPressed: () => _importM3uFromUrl('https://raw.githubusercontent.com/Free-TV/IPTV/master/playlists/playlist_brazil.m3u8', 'Free-TV Brasil'),
-                            child: const Text('🇧🇷 Carregar Free-TV Brasil'),
+                            child: const Text('🇧🇷 Free-TV Brasil'),
                           ),
                           ElevatedButton(
                             onPressed: () => _importM3uFromUrl('https://github.com/iprtl/m3u/raw/live/Pluto.m3u', 'Pluto TV'),
-                            child: const Text('📺 Carregar Pluto TV Brasil'),
+                            child: const Text('📺 Pluto TV Brasil'),
                           ),
                         ],
                       ),
@@ -690,18 +1147,18 @@ class _HomeScreenState extends State<HomeScreen> {
                           Expanded(
                             child: TextField(
                               controller: _m3uUrlCtrl,
-                              decoration: const InputDecoration(labelText: 'Ou cole qualquer URL .m3u / .m3u8 aqui'),
+                              decoration: const InputDecoration(labelText: 'Colar URL .m3u / .m3u8'),
                             ),
                           ),
                           const SizedBox(width: 8),
                           ElevatedButton(
                             onPressed: () => _importM3uFromUrl(_m3uUrlCtrl.text, 'Lista Importada'),
-                            child: const Text('Importar M3U8'),
+                            child: const Text('Importar'),
                           ),
                         ],
                       ),
-                      const Divider(height: 30),
-                      const Text('3. Instalar Extensão Stremio (manifest.json)', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                      const Divider(height: 28),
+                      const Text('4. Adicionar Extensão Stremio (manifest.json)', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                       Row(
                         children: [
                           Expanded(

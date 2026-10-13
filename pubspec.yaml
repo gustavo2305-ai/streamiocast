@@ -1,7 +1,7 @@
 name: chromecast_stremio_app
-description: Controle Chromecast 2015 + Canais M3U8 + Stremio para Android e Windows.
+description: Controle Chromecast 2015 + Series/Temporadas + Legendas PT-BR + Idioma.
 publish_to: 'none'
-version: 1.0.0+1
+version: 2.0.0+2
 
 environment:
   sdk: '>=3.2.0 <4.0.0'
