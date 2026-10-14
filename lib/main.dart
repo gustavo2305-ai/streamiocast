@@ -97,6 +97,7 @@ class CastV2Client {
 
   CastV2Client({required this.onStatus, required this.onTracksChanged});
 
+  bool get isConnected => _socket != null;
   String get localLanIp => _socket?.address.address ?? '127.0.0.1';
 
   List<int> _encodeVarint(int value) {
