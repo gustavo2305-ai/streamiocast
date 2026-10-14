@@ -1,7 +1,7 @@
 name: streamiocast
-description: Controle Chromecast 2015 + Series/Temporadas + Legendas PT-BR + Idioma.
+description: Controle Chromecast 2015 + Series/Temporadas + Autoplay + Dashboard Netflix + Canais & Extensoes.
 publish_to: 'none'
-version: 2.0.0+2
+version: 2.1.0+3
 
 environment:
   sdk: '>=3.2.0 <4.0.0'
