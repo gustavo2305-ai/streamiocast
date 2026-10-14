@@ -9,16 +9,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
+
+      - name: Configurar Java 17 para o Android Gradle
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Configurar Flutter
+        uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-      - name: Criar estrutura Android e liberar HTTP/Internet
+
+      - name: Gerar estrutura Android e Compilar APK
         run: |
-          flutter create --platforms=android .
-          sed -i 's/<application/<uses-permission android:name="android.permission.INTERNET"\/>\n    <application android:usesCleartextTraffic="true"/g' android/app/src/main/AndroidManifest.xml
+          flutter create --platforms=android --org com.streamiocast .
+          python3 -c "
+          p = 'android/app/src/main/AndroidManifest.xml'
+          txt = open(p).read()
+          if 'INTERNET' not in txt:
+              txt = txt.replace('<application', '<uses-permission android:name=\"android.permission.INTERNET\"/>\n    <application android:usesCleartextTraffic=\"true\"')
+              open(p, 'w').write(txt)
+          "
           flutter pub get
           flutter build apk --release
-      - uses: actions/upload-artifact@v4
+
+      - name: Disponibilizar APK para Download
+        uses: actions/upload-artifact@v4
         with:
           name: Aplicativo-Android-APK
           path: build/app/outputs/flutter-apk/app-release.apk
@@ -27,15 +44,20 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
+
+      - name: Configurar Flutter
+        uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
+
       - name: Compilar Executavel Windows (.exe)
         run: |
-          flutter create --platforms=windows .
+          flutter create --platforms=windows --org com.streamiocast .
           flutter pub get
           flutter build windows --release
-      - uses: actions/upload-artifact@v4
+
+      - name: Disponibilizar EXE para Download
+        uses: actions/upload-artifact@v4
         with:
           name: Programa-Windows-EXE
           path: build/windows/x64/runner/Release/
