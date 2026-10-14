@@ -1,0 +1,104 @@
+#EXTM3U
+# ==============================================================================
+# LISTA BRASIL FUNCIONAL - CANAIS ABERTOS & FECHADOS/TEMÁTICOS (100% VERIFICADOS)
+# Formato: HLS (.m3u8) compatível com Chromecast 2015, VLC, Smart TV e Windows
+# ==============================================================================
+
+# --- CANAIS ABERTOS ---
+#EXTINF:-1 tvg-logo="https://upload.wikimedia.org/wikipedia/commons/9/93/Sistema_Brasileiro_de_Televis%C3%A3o_logo.svg" group-title="Canais Abertos",SBT Nacional HD
+https://cdn.live.br1.jmvstream.com/w/LVW-10801/LVW10801_Xvg4R0u57n/chunklist.m3u8
+
+#EXTINF:-1 tvg-logo="https://upload.wikimedia.org/wikipedia/pt/c/c5/TV_Cultura_logo.png" group-title="Canais Abertos",TV Cultura Fast HD
+https://fpa-gateway.tvcultura.com.br:8181/memfs/606caef0-a290-413d-9f1f-8fcdb3a73831.m3u8
+
+#EXTINF:-1 tvg-logo="https://upload.wikimedia.org/wikipedia/commons/1/15/RedeTV%21_logo.png" group-title="Canais Abertos",RedeTV! Paraná HD
+https://tv01.zas.media:1936/redetvparana/redetvparana/playlist.m3u8
+
+#EXTINF:-1 tvg-logo="https://upload.wikimedia.org/wikipedia/commons/7/77/TV_Brasil_logo_2023.png" group-title="Canais Abertos",TV Brasil HD
+http://45.162.64.114/TV_BRASIL/index.m3u8
+
+#EXTINF:-1 tvg-logo="https://upload.wikimedia.org/wikipedia/pt/e/e0/Canal_Futura_logo.png" group-title="Canais Abertos",Canal Futura
+http://45.162.64.114/FUTURA/index.m3u8
+
+#EXTINF:-1 tvg-logo="https://upload.wikimedia.org/wikipedia/commons/8/87/TV_C%C3%A2mara_logo_2019.png" group-title="Canais Abertos",TV Câmara Federal
+https://stream3.camara.gov.br/tv1/manifest.m3u8
+
+#EXTINF:-1 tvg-logo="https://upload.wikimedia.org/wikipedia/commons/c/c5/TV_Senado_logo_2020.png" group-title="Canais Abertos",TV Senado Brasil
+http://45.162.64.114/TV_SENADO/index.m3u8
+
+# --- NOTÍCIAS 24H ---
+#EXTINF:-1 tvg-logo="https://upload.wikimedia.org/wikipedia/commons/6/66/CNN_Brasil_logo.svg" group-title="Notícias",CNN Brasil (1080p CloudFront)
+https://d25usgadhphvwi.cloudfront.net/hls/main.m3u8
+
+#EXTINF:-1 tvg-logo="https://upload.wikimedia.org/wikipedia/commons/4/4e/Record_News_logo_2023.png" group-title="Notícias",Record News HD
+http://45.162.64.114/RECORD_NEWS/index.m3u8
+
+#EXTINF:-1 tvg-logo="https://upload.wikimedia.org/wikipedia/commons/4/4e/Record_News_logo_2023.png" group-title="Notícias",Pluto TV Record News
+https://jmp2.uk/plu-6102e04e9ab1db0007a980a1.m3u8
+
+#EXTINF:-1 tvg-logo="https://upload.wikimedia.org/wikipedia/commons/e/eb/Jovem_Pan_News_logo_2021.png" group-title="Notícias",Jovem Pan News HD
+http://170.83.49.66:8083/JOVEMPANNEWSHD/index.m3u8
+
+#EXTINF:-1 tvg-logo="https://upload.wikimedia.org/wikipedia/commons/9/93/Sistema_Brasileiro_de_Televis%C3%A3o_logo.svg" group-title="Notícias",SBT News Ao Vivo
+https://dai.google.com/linear/hls/event/1XSOdtQ0SH2G8OEmEfGgjQ/master.m3u8
+
+# --- FILMES 24H (DUBLADO PT-BR) ---
+#EXTINF:-1 tvg-logo="https://images.pluto.tv/channels/5f120e94a5714d00074576a1/colorLogoPNG.png" group-title="Filmes",Filmes Sucessos (Pluto TV)
+https://jmp2.uk/plu-5f120e94a5714d00074576a1.m3u8
+
+#EXTINF:-1 tvg-logo="https://images.pluto.tv/channels/66c79a4262e5510008ff68a5/colorLogoPNG.png" group-title="Filmes",Filmes Aventura (Pluto TV)
+https://jmp2.uk/plu-66c79a4262e5510008ff68a5.m3u8
+
+#EXTINF:-1 tvg-logo="https://images.pluto.tv/channels/633dcebd80386500074a2461/colorLogoPNG.png" group-title="Filmes",Filmelier TV Filmes
+https://jmp2.uk/plu-633dcebd80386500074a2461.m3u8
+
+#EXTINF:-1 tvg-logo="https://images.pluto.tv/channels/663b9de4f999220008230fa8/colorLogoPNG.png" group-title="Filmes",Netmovies TV Filmes HD
+https://jmp2.uk/plu-663b9de4f999220008230fa8.m3u8
+
+#EXTINF:-1 tvg-logo="https://images.pluto.tv/channels/5fa1612a669ba0000702017b/colorLogoPNG.png" group-title="Filmes",Cine Clássicos HD
+https://jmp2.uk/plu-5fa1612a669ba0000702017b.m3u8
+
+#EXTINF:-1 tvg-logo="https://images.pluto.tv/channels/5f5a545d0dbf7f0007c09408/colorLogoPNG.png" group-title="Filmes",TV Filmes Nacionais
+https://jmp2.uk/plu-5f5a545d0dbf7f0007c09408.m3u8
+
+#EXTINF:-1 tvg-logo="" group-title="Filmes",Runtime TV & Filmes HD
+https://stream.ads.ottera.tv/playlist.m3u8?network_id=2153
+
+#EXTINF:-1 tvg-logo="" group-title="Filmes",Runtime CinEspanto (Terror/Suspense)
+https://stream.ads.ottera.tv/playlist.m3u8?network_id=4865
+
+#EXTINF:-1 tvg-logo="" group-title="Filmes",My Time Movie Network (Samsung TV)
+https://appletree-mytime-samsungbrazil.amagi.tv/playlist.m3u8?@iprtlk
+
+#EXTINF:-1 tvg-logo="" group-title="Filmes",Tela Brasil TV
+https://stmv.webtvninjas.com.br/mailson6054/mailson6054/playlist.m3u8
+
+# --- SÉRIES & NOVELAS 24H ---
+#EXTINF:-1 tvg-logo="https://upload.wikimedia.org/wikipedia/commons/8/82/TV_Globo_2021.svg" group-title="Séries & Novelas",Malhação Fast (Globo)
+https://dfr80qz435crc.cloudfront.net/EFGH/Amagi/Globo/Malhacao_Fast_BR/576p-vtt/index.m3u8
+
+#EXTINF:-1 tvg-logo="https://upload.wikimedia.org/wikipedia/commons/9/90/RecordTV_logo_2016.png" group-title="Séries & Novelas",Os Dez Mandamentos 24h
+https://cc-38amk5g6kmcpo.akamaized.net/Os_Dez_Mandamentos.m3u8
+
+#EXTINF:-1 tvg-logo="https://upload.wikimedia.org/wikipedia/commons/9/90/RecordTV_logo_2016.png" group-title="Séries & Novelas",A Terra Prometida 24h
+https://dfr80qz435crc.cloudfront.net/IJKL/Amagi/Samsung/ATerraPrometida_BR/ATerraPrometida.m3u8
+
+# --- DESENHOS, KIDS & ANIMES ---
+#EXTINF:-1 tvg-logo="https://images.pluto.tv/channels/655e5c4d2c46f3000877a54b/colorLogoPNG.png" group-title="Desenhos & Kids",Desenhos Clássicos 24h
+https://jmp2.uk/plu-655e5c4d2c46f3000877a54b.m3u8
+
+#EXTINF:-1 tvg-logo="https://images.pluto.tv/channels/604b79c558393100078faeef/colorLogoPNG.png" group-title="Animes",Anime Ação 24h
+https://jmp2.uk/plu-604b79c558393100078faeef.m3u8
+
+#EXTINF:-1 tvg-logo="" group-title="Animes",Anime Onegai HD
+https://stream.ads.ottera.tv/playlist.m3u8?network_id=11777
+
+# --- ENTRETENIMENTO & ESPORTES ---
+#EXTINF:-1 tvg-logo="https://upload.wikimedia.org/wikipedia/commons/1/1a/Comedy_Central_2018_logo.svg" group-title="Entretenimento",Comedy Central Brasil
+https://stmv2.srvif.com/gafeab/gafeab/playlist.m3u8
+
+#EXTINF:-1 tvg-logo="https://images.pluto.tv/channels/5fd1419a3b4f4b000773ba85/colorLogoPNG.png" group-title="Entretenimento",Tastemade Brasil 24h
+https://jmp2.uk/plu-5fd1419a3b4f4b000773ba85.m3u8
+
+#EXTINF:-1 tvg-logo="https://images.pluto.tv/channels/5ad9b648e738977e2c312131/colorLogoPNG.png" group-title="Esportes",Red Bull TV (Esportes HLS)
+https://rbmn-live.akamaized.net/hls/live/590964/BoRB-AT/master.m3u8

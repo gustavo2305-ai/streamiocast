@@ -371,17 +371,148 @@ class _HomeScreenState extends State<HomeScreen> {
   double _volume = 0.8;
 
   List<ChannelItem> _allChannels = [
+    // CANAIS ABERTOS & NOTÍCIAS
     ChannelItem(
-      name: 'Red Bull TV (Ao Vivo HLS)',
+      name: 'CNN Brasil (1080p)',
+      group: 'Notícias',
+      logo: 'https://upload.wikimedia.org/wikipedia/commons/6/66/CNN_Brasil_logo.svg',
+      url: 'https://d25usgadhphvwi.cloudfront.net/hls/main.m3u8',
+    ),
+    ChannelItem(
+      name: 'SBT Nacional HD',
+      group: 'Canais Abertos',
+      logo: 'https://upload.wikimedia.org/wikipedia/commons/9/93/Sistema_Brasileiro_de_Televis%C3%A3o_logo.svg',
+      url: 'https://cdn.live.br1.jmvstream.com/w/LVW-10801/LVW10801_Xvg4R0u57n/chunklist.m3u8',
+    ),
+    ChannelItem(
+      name: 'TV Cultura Fast HD',
+      group: 'Canais Abertos',
+      logo: 'https://upload.wikimedia.org/wikipedia/pt/c/c5/TV_Cultura_logo.png',
+      url: 'https://fpa-gateway.tvcultura.com.br:8181/memfs/606caef0-a290-413d-9f1f-8fcdb3a73831.m3u8',
+    ),
+    ChannelItem(
+      name: 'Record News HD',
+      group: 'Notícias',
+      logo: 'https://upload.wikimedia.org/wikipedia/commons/4/4e/Record_News_logo_2023.png',
+      url: 'http://45.162.64.114/RECORD_NEWS/index.m3u8',
+    ),
+    ChannelItem(
+      name: 'RedeTV! Paraná HD',
+      group: 'Canais Abertos',
+      logo: 'https://upload.wikimedia.org/wikipedia/commons/1/15/RedeTV%21_logo.png',
+      url: 'https://tv01.zas.media:1936/redetvparana/redetvparana/playlist.m3u8',
+    ),
+    ChannelItem(
+      name: 'TV Brasil HD',
+      group: 'Canais Abertos',
+      logo: 'https://upload.wikimedia.org/wikipedia/commons/7/77/TV_Brasil_logo_2023.png',
+      url: 'http://45.162.64.114/TV_BRASIL/index.m3u8',
+    ),
+    ChannelItem(
+      name: 'Canal Futura',
+      group: 'Canais Abertos',
+      logo: 'https://upload.wikimedia.org/wikipedia/pt/e/e0/Canal_Futura_logo.png',
+      url: 'http://45.162.64.114/FUTURA/index.m3u8',
+    ),
+    ChannelItem(
+      name: 'Jovem Pan News HD',
+      group: 'Notícias',
+      logo: 'https://upload.wikimedia.org/wikipedia/commons/e/eb/Jovem_Pan_News_logo_2021.png',
+      url: 'http://170.83.49.66:8083/JOVEMPANNEWSHD/index.m3u8',
+    ),
+    ChannelItem(
+      name: 'SBT News Ao Vivo',
+      group: 'Notícias',
+      logo: 'https://upload.wikimedia.org/wikipedia/commons/9/93/Sistema_Brasileiro_de_Televis%C3%A3o_logo.svg',
+      url: 'https://dai.google.com/linear/hls/event/1XSOdtQ0SH2G8OEmEfGgjQ/master.m3u8',
+    ),
+
+    // FILMES & SÉRIES 24H (DUBLADO PT-BR)
+    ChannelItem(
+      name: 'Filmes Sucessos (Pluto TV)',
+      group: 'Filmes',
+      logo: 'https://images.pluto.tv/channels/5f120e94a5714d00074576a1/colorLogoPNG.png',
+      url: 'https://jmp2.uk/plu-5f120e94a5714d00074576a1.m3u8',
+    ),
+    ChannelItem(
+      name: 'Filmes Aventura (Pluto TV)',
+      group: 'Filmes',
+      logo: 'https://images.pluto.tv/channels/66c79a4262e5510008ff68a5/colorLogoPNG.png',
+      url: 'https://jmp2.uk/plu-66c79a4262e5510008ff68a5.m3u8',
+    ),
+    ChannelItem(
+      name: 'Netmovies TV Filmes HD',
+      group: 'Filmes',
+      logo: 'https://images.pluto.tv/channels/663b9de4f999220008230fa8/colorLogoPNG.png',
+      url: 'https://jmp2.uk/plu-663b9de4f999220008230fa8.m3u8',
+    ),
+    ChannelItem(
+      name: 'Cine Clássicos HD',
+      group: 'Filmes',
+      logo: 'https://images.pluto.tv/channels/5fa1612a669ba0000702017b/colorLogoPNG.png',
+      url: 'https://jmp2.uk/plu-5fa1612a669ba0000702017b.m3u8',
+    ),
+    ChannelItem(
+      name: 'Runtime TV & Filmes HD',
+      group: 'Filmes',
+      logo: 'https://image.tmdb.org/t/p/w600_and_h900_bestv2/uVEFQvFMMsg4e6yb03xOfVsDz4o.jpg',
+      url: 'https://stream.ads.ottera.tv/playlist.m3u8?network_id=2153',
+    ),
+    ChannelItem(
+      name: 'Runtime CinEspanto (Terror)',
+      group: 'Filmes',
+      logo: 'https://image.tmdb.org/t/p/w600_and_h900_bestv2/uVEFQvFMMsg4e6yb03xOfVsDz4o.jpg',
+      url: 'https://stream.ads.ottera.tv/playlist.m3u8?network_id=4865',
+    ),
+    ChannelItem(
+      name: 'Malhação Fast (Globo)',
+      group: 'Séries & Novelas',
+      logo: 'https://upload.wikimedia.org/wikipedia/commons/8/82/TV_Globo_2021.svg',
+      url: 'https://dfr80qz435crc.cloudfront.net/EFGH/Amagi/Globo/Malhacao_Fast_BR/576p-vtt/index.m3u8',
+    ),
+    ChannelItem(
+      name: 'Os Dez Mandamentos 24h',
+      group: 'Séries & Novelas',
+      logo: 'https://upload.wikimedia.org/wikipedia/commons/9/90/RecordTV_logo_2016.png',
+      url: 'https://cc-38amk5g6kmcpo.akamaized.net/Os_Dez_Mandamentos.m3u8',
+    ),
+    ChannelItem(
+      name: 'A Terra Prometida 24h',
+      group: 'Séries & Novelas',
+      logo: 'https://upload.wikimedia.org/wikipedia/commons/9/90/RecordTV_logo_2016.png',
+      url: 'https://dfr80qz435crc.cloudfront.net/IJKL/Amagi/Samsung/ATerraPrometida_BR/ATerraPrometida.m3u8',
+    ),
+
+    // DESENHOS, ANIMES, ESPORTES & ENTRETENIMENTO
+    ChannelItem(
+      name: 'Desenhos Clássicos 24h',
+      group: 'Desenhos & Kids',
+      logo: 'https://images.pluto.tv/channels/655e5c4d2c46f3000877a54b/colorLogoPNG.png',
+      url: 'https://jmp2.uk/plu-655e5c4d2c46f3000877a54b.m3u8',
+    ),
+    ChannelItem(
+      name: 'Anime Ação 24h',
+      group: 'Animes',
+      logo: 'https://images.pluto.tv/channels/604b79c558393100078faeef/colorLogoPNG.png',
+      url: 'https://jmp2.uk/plu-604b79c558393100078faeef.m3u8',
+    ),
+    ChannelItem(
+      name: 'Comedy Central Brasil',
+      group: 'Entretenimento',
+      logo: 'https://upload.wikimedia.org/wikipedia/commons/1/1a/Comedy_Central_2018_logo.svg',
+      url: 'https://stmv2.srvif.com/gafeab/gafeab/playlist.m3u8',
+    ),
+    ChannelItem(
+      name: 'Tastemade Brasil 24h',
+      group: 'Entretenimento',
+      logo: 'https://images.pluto.tv/channels/5fd1419a3b4f4b000773ba85/colorLogoPNG.png',
+      url: 'https://jmp2.uk/plu-5fd1419a3b4f4b000773ba85.m3u8',
+    ),
+    ChannelItem(
+      name: 'Red Bull TV (Esportes HLS)',
       group: 'Esportes',
       logo: 'https://images.pluto.tv/channels/5ad9b648e738977e2c312131/colorLogoPNG.png',
       url: 'https://rbmn-live.akamaized.net/hls/live/590964/BoRB-AT/master.m3u8',
-    ),
-    ChannelItem(
-      name: 'Big Buck Bunny (1080p MP4)',
-      group: 'Teste',
-      logo: 'https://image.tmdb.org/t/p/w600_and_h900_bestv2/uVEFQvFMMsg4e6yb03xOfVsDz4o.jpg',
-      url: 'http://distribution.bbb3d.renderfarming.net/video/mp4/bbb_sunflower_1080p_30fps_normal.mp4',
     ),
   ];
 
@@ -390,9 +521,11 @@ class _HomeScreenState extends State<HomeScreen> {
   String _audioFilter = 'Todos'; // 'Todos', 'Dublado', 'Original'
 
   List<Map<String, dynamic>> _stremioAddons = [
-    {'name': 'Cinemeta', 'baseUrl': 'https://v3-cinemeta.strem.io'},
-    {'name': 'Torrentio (Prioridade PT-BR)', 'baseUrl': 'https://torrentio.strem.fun/language=portuguese'},
-    {'name': 'OpenSubtitles v3', 'baseUrl': 'https://opensubtitles-v3.strem.io'},
+    {'name': 'BestCine (Dublado PT-BR)', 'baseUrl': 'https://bestcine.dpdns.org'},
+    {'name': 'Torrentio (Prioridade Dublado PT-BR)', 'baseUrl': 'https://torrentio.strem.fun/language=portuguese|sort=qualitysize'},
+    {'name': 'Cinemeta (Filmes & Séries)', 'baseUrl': 'https://v3-cinemeta.strem.io'},
+    {'name': 'OpenSubtitles v3 (Legendas PT-BR)', 'baseUrl': 'https://opensubtitles-v3.strem.io'},
+    {'name': 'Anime Kitsu', 'baseUrl': 'https://anime-kitsu.strem.fun'},
   ];
   List<dynamic> _stremioMetas = [];
   String _stremioType = 'movie';
@@ -1172,6 +1305,35 @@ class _HomeScreenState extends State<HomeScreen> {
                           ElevatedButton(
                             onPressed: () => _installStremioAddon(_addonUrlCtrl.text),
                             child: const Text('Instalar'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      const Text('Add-ons Recomendados (1 Toque para Ativar):', style: TextStyle(fontSize: 13, color: Colors.grey)),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 6,
+                        children: [
+                          ActionChip(
+                            label: const Text('🎬 BestCine (PT-BR)'),
+                            onPressed: () => _installStremioAddon('https://bestcine.dpdns.org/manifest.json'),
+                          ),
+                          ActionChip(
+                            label: const Text('⚡ Torrentio (Dublado)'),
+                            onPressed: () => _installStremioAddon('https://torrentio.strem.fun/language=portuguese|sort=qualitysize/manifest.json'),
+                          ),
+                          ActionChip(
+                            label: const Text('💬 OpenSubtitles v3'),
+                            onPressed: () => _installStremioAddon('https://opensubtitles-v3.strem.io/manifest.json'),
+                          ),
+                          ActionChip(
+                            label: const Text('🍿 TMDB Metadata BR'),
+                            onPressed: () => _installStremioAddon('https://94c8cb9f702d-tmdb-addon.baby-beamup.club/manifest.json'),
+                          ),
+                          ActionChip(
+                            label: const Text('🍙 Anime Kitsu'),
+                            onPressed: () => _installStremioAddon('https://anime-kitsu.strem.fun/manifest.json'),
                           ),
                         ],
                       ),
