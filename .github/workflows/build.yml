@@ -10,20 +10,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configurar Java 17 para o Android Gradle
+      - name: Instalar Java 17 para o Android Gradle
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Configurar Flutter
+      - name: Instalar Flutter SDK
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
 
-      - name: Gerar estrutura Android e Compilar APK
+      - name: Gerar projeto Android e compilar APK
         run: |
-          flutter create --platforms=android --org com.streamiocast .
+          flutter config --enable-android
+          flutter create --project-name streamiocast --platforms=android --org com.streamiocast .
           python3 -c "
           p = 'android/app/src/main/AndroidManifest.xml'
           txt = open(p).read()
@@ -45,14 +46,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configurar Flutter
+      - name: Instalar Flutter SDK
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
 
-      - name: Compilar Executavel Windows (.exe)
+      - name: Gerar projeto Windows e compilar EXE
         run: |
-          flutter create --platforms=windows --org com.streamiocast .
+          flutter config --enable-windows-desktop
+          flutter create --project-name streamiocast --platforms=windows --org com.streamiocast .
           flutter pub get
           flutter build windows --release
 

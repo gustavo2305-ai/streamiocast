@@ -1,4 +1,4 @@
-name: chromecast_stremio_app
+name: streamiocast
 description: Controle Chromecast 2015 + Series/Temporadas + Legendas PT-BR + Idioma.
 publish_to: 'none'
 version: 2.0.0+2
