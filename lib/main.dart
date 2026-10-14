@@ -29,7 +29,7 @@ class ChromecastStremioApp extends StatelessWidget {
           backgroundColor: Color(0xFF0A0C10),
           elevation: 0,
         ),
-        cardTheme: CardTheme(
+        cardTheme: CardThemeData(
           color: const Color(0xFF141722),
           elevation: 4,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
@@ -1021,8 +1021,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _parseM3uContent(String raw, String fallbackGroup) {
-    final lines = raw.split(RegExp(r'?
-'));
+    final lines = raw.replaceAll('\r', '').split('\n');
     final added = <ChannelItem>[];
     String? currName;
     String currLogo = '';
