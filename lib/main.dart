@@ -57,7 +57,7 @@ class LocalSubtitleServer {
         req.response.headers.add('Access-Control-Allow-Origin', '*');
         req.response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS');
         req.response.headers.add('Access-Control-Allow-Headers', '*');
-        req.response.contentType = ContentType('text', 'vtt', charset: 'utf-8');
+        req.response.headers.contentType = ContentType('text', 'vtt', charset: 'utf-8');
         req.response.write(_currentVtt);
         req.response.close();
       });
