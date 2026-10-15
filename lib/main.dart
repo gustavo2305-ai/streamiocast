@@ -57,7 +57,7 @@ class LocalSubtitleServer {
         req.response.headers.add('Access-Control-Allow-Origin', '*');
         req.response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS');
         req.response.headers.add('Access-Control-Allow-Headers', '*');
-        req.response.headers.contentType = ContentType('text', 'vtt', charset: 'utf-8');
+        req.response.contentType = ContentType('text', 'vtt', charset: 'utf-8');
         req.response.write(_currentVtt);
         req.response.close();
       });
@@ -79,6 +79,1034 @@ class LocalSubtitleServer {
     _currentVtt = srtToWebVtt(decoded);
     return 'http://$localIp:$port/sub_${DateTime.now().millisecondsSinceEpoch}.vtt';
   }
+}
+
+// ============================================================================
+// SERVIDOR WEB LOCAL EMBUTIDO & PWA NETFLIX PARA ACESSO VIA IPHONE (PORTA 8080)
+// ============================================================================
+class LocalWebRemoteServer {
+  HttpServer? _server;
+  final List<ChannelItem> Function() getChannels;
+  final Map<String, StreamHealth> Function() getHealthMap;
+  final List<StremioAddon> Function() getAddons;
+  final ActivePlaybackContext? Function() getCurrentPlayback;
+  final String Function() getPlayerState;
+  final double Function() getVolume;
+  final String Function() getCastIp;
+  final Future<void> Function({
+    required String url,
+    required String title,
+    String poster,
+    String? subtitleUrl,
+    Map<String, dynamic>? seriesContext,
+  }) onPlayMedia;
+  final Future<void> Function(String cmd) onMediaCmd;
+  final Future<void> Function(double vol) onSetVolume;
+  final Future<void> Function(List<ChannelItem> channels) onTestChannels;
+
+  LocalWebRemoteServer({
+    required this.getChannels,
+    required this.getHealthMap,
+    required this.getAddons,
+    required this.getCurrentPlayback,
+    required this.getPlayerState,
+    required this.getVolume,
+    required this.getCastIp,
+    required this.onPlayMedia,
+    required this.onMediaCmd,
+    required this.onSetVolume,
+    required this.onTestChannels,
+  });
+
+  int get port => _server?.port ?? 8080;
+
+  Future<void> start({int port = 8080}) async {
+    if (_server != null) return;
+    try {
+      _server = await HttpServer.bind(InternetAddress.anyIPv4, port);
+      _server!.listen(_handleRequest);
+    } catch (_) {
+      try {
+        _server = await HttpServer.bind(InternetAddress.anyIPv4, 0);
+        _server!.listen(_handleRequest);
+      } catch (_) {}
+    }
+  }
+
+  Future<void> stop() async {
+    try {
+      await _server?.close(force: true);
+    } catch (_) {}
+    _server = null;
+  }
+
+  void _addCors(HttpResponse res) {
+    res.headers.add('Access-Control-Allow-Origin', '*');
+    res.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.headers.add('Access-Control-Allow-Headers', '*');
+  }
+
+  Future<void> _handleRequest(HttpRequest req) async {
+    _addCors(req.response);
+    if (req.method == 'OPTIONS') {
+      req.response.statusCode = 200;
+      await req.response.close();
+      return;
+    }
+
+    final path = req.uri.path;
+
+    try {
+      // 1. ROTA RAIZ: SERVE O APP WEB / PWA NETFLIX
+      if (path == '/' || path == '/index.html') {
+        req.response.headers.contentType = ContentType.html;
+        req.response.write(_webAppHtml);
+        await req.response.close();
+        return;
+      }
+
+      // 2. API: STATUS DA TRANSMISSÃO
+      if (path == '/api/status') {
+        final cur = getCurrentPlayback();
+        final data = {
+          'connected': true,
+          'castIp': getCastIp(),
+          'playerState': getPlayerState(),
+          'volume': getVolume(),
+          'currentPlayback': cur == null
+              ? null
+              : {
+                  'title': cur.title,
+                  'poster': cur.poster,
+                  'type': cur.type,
+                  'isSeries': cur.isSeries,
+                  'seriesId': cur.seriesId,
+                  'seriesTitle': cur.seriesTitle,
+                  'season': cur.season,
+                  'episode': cur.episode,
+                },
+        };
+        req.response.headers.contentType = ContentType.json;
+        req.response.write(jsonEncode(data));
+        await req.response.close();
+        return;
+      }
+
+      // 3. API: LISTA DE CANAIS COM STATUS ONLINE/OFFLINE
+      if (path == '/api/channels') {
+        final channels = getChannels();
+        final health = getHealthMap();
+        final list = channels.map((c) {
+          final h = health[c.url];
+          return {
+            'name': c.name,
+            'group': c.group,
+            'logo': c.logo,
+            'url': c.url,
+            'status': h?.status.name ?? 'unknown',
+            'latency': h?.latencyMs,
+          };
+        }).toList();
+        req.response.headers.contentType = ContentType.json;
+        req.response.write(jsonEncode({'channels': list}));
+        await req.response.close();
+        return;
+      }
+
+      // 4. API: CATÁLOGO DE FILMES / SÉRIES
+      if (path == '/api/catalog') {
+        final type = req.uri.queryParameters['type'] ?? 'series';
+        final search = req.uri.queryParameters['search'] ?? '';
+        final extra = search.trim().isNotEmpty ? '/search=${Uri.encodeComponent(search.trim())}.json' : '.json';
+        final u = 'https://v3-cinemeta.strem.io/catalog/$type/top$extra';
+        final r = await http.get(Uri.parse(u)).timeout(const Duration(seconds: 8));
+        req.response.headers.contentType = ContentType.json;
+        req.response.write(r.body);
+        await req.response.close();
+        return;
+      }
+
+      // 5. API: EPISÓDIOS E TEMPORADAS DA SÉRIE
+      if (path == '/api/series') {
+        final id = req.uri.queryParameters['id'] ?? '';
+        final u = 'https://v3-cinemeta.strem.io/meta/series/${Uri.encodeComponent(id)}.json';
+        final r = await http.get(Uri.parse(u)).timeout(const Duration(seconds: 8));
+        final bySeason = <String, List<Map<String, dynamic>>>{};
+        final allEps = <Map<String, dynamic>>[];
+        if (r.statusCode == 200) {
+          final videos = jsonDecode(r.body)['meta']?['videos'] as List? ?? [];
+          for (final v in videos) {
+            final sNum = (v['season'] as num?)?.toInt() ?? 1;
+            if (sNum == 0) continue;
+            final map = Map<String, dynamic>.from(v);
+            bySeason.putIfAbsent(sNum.toString(), () => []).add(map);
+            allEps.add(map);
+          }
+        }
+        for (final k in bySeason.keys) {
+          bySeason[k]!.sort((a, b) => ((a['episode'] as num?) ?? 0).compareTo((b['episode'] as num?) ?? 0));
+        }
+        req.response.headers.contentType = ContentType.json;
+        req.response.write(jsonEncode({'seasons': bySeason, 'all': allEps}));
+        await req.response.close();
+        return;
+      }
+
+      // 6. API: BUSCA DE STREAMS E LEGENDAS
+      if (path == '/api/streams') {
+        final type = req.uri.queryParameters['type'] ?? 'movie';
+        final id = req.uri.queryParameters['id'] ?? '';
+        final streams = <Map<String, dynamic>>[];
+        final subtitles = <Map<String, String>>[];
+
+        for (final a in getAddons().where((addon) => addon.enabled)) {
+          try {
+            final u = '${a.baseUrl}/stream/$type/${Uri.encodeComponent(id)}.json';
+            final r = await http.get(Uri.parse(u)).timeout(const Duration(seconds: 6));
+            if (r.statusCode == 200) {
+              final list = jsonDecode(r.body)['streams'] as List? ?? [];
+              for (final s in list) {
+                final directUrl = s['url']?.toString();
+                final desc = '${s['name'] ?? ''} ${s['title'] ?? ''}'.trim();
+                final upper = desc.toUpperCase();
+                final isPtBr = upper.contains('DUBLADO') ||
+                    upper.contains('DUAL') ||
+                    upper.contains('PT-BR') ||
+                    upper.contains('PORTUGUES') ||
+                    upper.contains('🇧🇷') ||
+                    upper.contains('🇵🇹');
+
+                if (directUrl != null && directUrl.isNotEmpty) {
+                  streams.add({
+                    'addon': a.name,
+                    'title': desc,
+                    'url': directUrl,
+                    'isPtBr': isPtBr,
+                  });
+                }
+              }
+            }
+          } catch (_) {}
+        }
+
+        streams.sort((a, b) => (b['isPtBr'] ? 1 : 0).compareTo(a['isPtBr'] ? 1 : 0));
+
+        try {
+          final subUrl = 'https://opensubtitles-v3.strem.io/subtitles/$type/${Uri.encodeComponent(id)}.json';
+          final sr = await http.get(Uri.parse(subUrl)).timeout(const Duration(seconds: 6));
+          if (sr.statusCode == 200) {
+            final rawSubs = jsonDecode(sr.body)['subtitles'] as List? ?? [];
+            for (final sub in rawSubs) {
+              final lang = (sub['lang'] ?? '').toString().toLowerCase();
+              final u = (sub['url'] ?? '').toString();
+              if (u.isNotEmpty && (lang.contains('pob') || lang.contains('pt') || lang.contains('bra'))) {
+                subtitles.add({'label': '🇧🇷 Português', 'url': u});
+                break;
+              }
+            }
+          }
+        } catch (_) {}
+
+        req.response.headers.contentType = ContentType.json;
+        req.response.write(jsonEncode({'streams': streams, 'subtitles': subtitles}));
+        await req.response.close();
+        return;
+      }
+
+      // 7. API: REPRODUZIR NA TV
+      if (path == '/api/play' && req.method == 'POST') {
+        final bodyStr = await utf8.decodeStream(req);
+        final body = jsonDecode(bodyStr) as Map<String, dynamic>;
+        final url = (body['url'] ?? '').toString();
+        final title = (body['title'] ?? 'Título').toString();
+        final poster = (body['poster'] ?? '').toString();
+        final subUrl = body['subtitleUrl']?.toString();
+        final seriesContext = body['seriesContext'] as Map<String, dynamic>?;
+
+        await onPlayMedia(
+          url: url,
+          title: title,
+          poster: poster,
+          subtitleUrl: subUrl,
+          seriesContext: seriesContext,
+        );
+
+        req.response.headers.contentType = ContentType.json;
+        req.response.write(jsonEncode({'success': true}));
+        await req.response.close();
+        return;
+      }
+
+      // 8. API: COMANDOS DE MÍDIA
+      if (path == '/api/cmd' && req.method == 'POST') {
+        final bodyStr = await utf8.decodeStream(req);
+        final body = jsonDecode(bodyStr) as Map<String, dynamic>;
+        final cmd = (body['type'] ?? '').toString();
+        await onMediaCmd(cmd);
+        req.response.headers.contentType = ContentType.json;
+        req.response.write(jsonEncode({'success': true}));
+        await req.response.close();
+        return;
+      }
+
+      // 9. API: VOLUME
+      if (path == '/api/volume' && req.method == 'POST') {
+        final bodyStr = await utf8.decodeStream(req);
+        final body = jsonDecode(bodyStr) as Map<String, dynamic>;
+        final vol = (body['volume'] as num?)?.toDouble() ?? 0.8;
+        await onSetVolume(vol);
+        req.response.headers.contentType = ContentType.json;
+        req.response.write(jsonEncode({'success': true}));
+        await req.response.close();
+        return;
+      }
+
+      req.response.statusCode = 404;
+      req.response.write('Not Found');
+      await req.response.close();
+    } catch (e) {
+      req.response.statusCode = 500;
+      req.response.write('Error: $e');
+      await req.response.close();
+    }
+  }
+
+  static const String _webAppHtml = r'''<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>StreamioCast • Netflix</title>
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="StreamioCast">
+  <meta name="theme-color" content="#0A0C10">
+  <link rel="apple-touch-icon" href="https://upload.wikimedia.org/wikipedia/commons/7/7a/Logonetflix.png">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    body {
+      background: #0A0C10;
+      color: #FFFFFF;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      padding-bottom: 90px;
+      overflow-x: hidden;
+      user-select: none;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(10, 12, 16, 0.95);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .logo-container { display: flex; align-items: center; gap: 6px; }
+    .logo-badge {
+      background: #E50914;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 900;
+      padding: 3px 6px;
+      border-radius: 4px;
+      letter-spacing: 1px;
+    }
+    .logo-sub { font-size: 13px; font-weight: 300; letter-spacing: 2px; color: #bbb; }
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: #141722;
+      padding: 4px 10px;
+      border-radius: 16px;
+      font-size: 11px;
+      font-weight: 600;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #666; }
+    .dot.online { background: #10B981; box-shadow: 0 0 6px #10B981; }
+
+    nav {
+      position: sticky;
+      top: 53px;
+      z-index: 99;
+      background: #0A0C10;
+      display: flex;
+      gap: 8px;
+      padding: 8px 16px;
+      overflow-x: auto;
+      white-space: nowrap;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    nav::-webkit-scrollbar { display: none; }
+    .nav-btn {
+      background: #141722;
+      color: #aaa;
+      border: none;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .nav-btn.active {
+      background: #E50914;
+      color: #fff;
+    }
+
+    .view { display: none; padding: 14px; }
+    .view.active { display: block; }
+
+    /* HERO BANNER */
+    .hero-banner {
+      position: relative;
+      height: 280px;
+      border-radius: 12px;
+      overflow: hidden;
+      margin-bottom: 20px;
+      background-size: cover;
+      background-position: center;
+      display: flex;
+      align-items: flex-end;
+      padding: 16px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+    }
+    .hero-grad {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(to top, rgba(10,12,16,1) 0%, rgba(10,12,16,0.6) 50%, transparent 100%);
+    }
+    .hero-content { position: relative; z-index: 2; width: 100%; }
+    .hero-tags { display: flex; gap: 6px; margin-bottom: 6px; }
+    .tag { font-size: 9px; font-weight: bold; padding: 2px 6px; border-radius: 3px; }
+    .tag-red { background: #E50914; color: #fff; }
+    .tag-green { background: #10B981; color: #fff; }
+    .hero-title { font-size: 22px; font-weight: 900; margin-bottom: 4px; }
+    .hero-desc { font-size: 12px; color: #bbb; line-height: 1.3; margin-bottom: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .hero-actions { display: flex; gap: 10px; }
+    .btn-play {
+      background: #fff;
+      color: #000;
+      border: none;
+      padding: 8px 18px;
+      border-radius: 6px;
+      font-weight: bold;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+    .btn-info {
+      background: rgba(255,255,255,0.2);
+      color: #fff;
+      border: none;
+      padding: 8px 14px;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    /* SWIMLANES */
+    .section-title { font-size: 16px; font-weight: bold; margin: 16px 0 10px 0; }
+    .swimlane {
+      display: flex;
+      gap: 10px;
+      overflow-x: auto;
+      padding-bottom: 8px;
+    }
+    .swimlane::-webkit-scrollbar { display: none; }
+    .movie-card {
+      min-width: 105px;
+      max-width: 105px;
+      flex-shrink: 0;
+      cursor: pointer;
+    }
+    .poster-wrap {
+      width: 105px;
+      height: 150px;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #141722;
+      position: relative;
+    }
+    .poster-img { width: 100%; height: 100%; object-fit: cover; }
+    .card-title { font-size: 11px; font-weight: 600; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #ddd; }
+
+    /* GRID */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+      gap: 12px;
+    }
+
+    /* SEARCH */
+    .search-box {
+      width: 100%;
+      background: #141722;
+      border: 1px solid rgba(255,255,255,0.1);
+      padding: 10px 14px;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 14px;
+      margin-bottom: 14px;
+      outline: none;
+    }
+    .search-box:focus { border-color: #E50914; }
+
+    /* CHANNELS */
+    .channel-item {
+      background: #141722;
+      border-radius: 8px;
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      border: 1px solid rgba(255,255,255,0.05);
+    }
+    .ch-info { display: flex; align-items: center; gap: 12px; flex: 1; overflow: hidden; }
+    .ch-logo { width: 40px; height: 40px; object-fit: contain; border-radius: 4px; background: #0A0C10; }
+    .ch-name { font-size: 13px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ch-group { font-size: 11px; color: #888; }
+    .btn-cast {
+      background: #10B981;
+      color: #fff;
+      border: none;
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-weight: bold;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    /* REMOTE CONTROL */
+    .remote-card {
+      background: #141722;
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+      margin-bottom: 16px;
+    }
+    .remote-row {
+      display: flex;
+      justify-content: center;
+      gap: 14px;
+      margin: 16px 0;
+    }
+    .remote-btn {
+      background: #202434;
+      color: #fff;
+      border: none;
+      width: 58px;
+      height: 58px;
+      border-radius: 50%;
+      font-size: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .remote-btn:active { background: #E50914; }
+    .remote-btn.big {
+      width: 72px;
+      height: 72px;
+      background: #E50914;
+      font-size: 26px;
+    }
+    .vol-slider {
+      width: 100%;
+      margin-top: 14px;
+      accent-color: #E50914;
+    }
+
+    /* MINI PLAYER */
+    .mini-player {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: rgba(20, 23, 34, 0.96);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-top: 1px solid rgba(229, 9, 20, 0.4);
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      z-index: 200;
+      padding-bottom: max(10px, env(safe-area-inset-bottom));
+      box-shadow: 0 -4px 16px rgba(0,0,0,0.5);
+    }
+    .mini-poster { width: 38px; height: 50px; border-radius: 4px; object-fit: cover; background: #0A0C10; }
+    .mini-info { flex: 1; overflow: hidden; }
+    .mini-title { font-size: 12px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #fff; }
+    .mini-sub { font-size: 10px; color: #10B981; }
+    .mini-btn {
+      background: none;
+      border: none;
+      color: #fff;
+      font-size: 22px;
+      cursor: pointer;
+      padding: 4px;
+    }
+    .mini-btn.red { color: #E50914; }
+
+    /* MODAL */
+    .modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.85);
+      z-index: 300;
+      padding: 16px;
+      overflow-y: auto;
+    }
+    .modal-content {
+      background: #141722;
+      border-radius: 12px;
+      padding: 18px;
+      max-width: 500px;
+      margin: 20px auto;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+    .modal-close { background: none; border: none; color: #aaa; font-size: 24px; cursor: pointer; }
+    .season-select {
+      width: 100%;
+      background: #0A0C10;
+      color: #fff;
+      border: 1px solid rgba(255,255,255,0.15);
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      margin-bottom: 14px;
+    }
+    .ep-item {
+      background: #0A0C10;
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .ep-thumb { width: 64px; height: 42px; border-radius: 4px; object-fit: cover; background: #1a1d28; }
+    .ep-info { flex: 1; overflow: hidden; }
+    .ep-title { font-size: 12px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ep-desc { font-size: 10px; color: #888; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo-container">
+      <span class="logo-badge">STREAMIO</span>
+      <span class="logo-sub">CAST</span>
+    </div>
+    <div class="status-pill">
+      <span class="dot" id="castDot"></span>
+      <span id="castStatusText">TV</span>
+    </div>
+  </header>
+
+  <nav>
+    <button class="nav-btn active" onclick="switchTab('inicio')">🏠 Início</button>
+    <button class="nav-btn" onclick="switchTab('series')">📺 Séries</button>
+    <button class="nav-btn" onclick="switchTab('filmes')">🎬 Filmes</button>
+    <button class="nav-btn" onclick="switchTab('canais')">📡 TV Ao Vivo</button>
+    <button class="nav-btn" onclick="switchTab('controle')">📱 Controle</button>
+  </nav>
+
+  <!-- ABA 0: INÍCIO -->
+  <div id="tab-inicio" class="view active">
+    <div id="heroBanner" class="hero-banner" style="display:none;">
+      <div class="hero-grad"></div>
+      <div class="hero-content">
+        <div class="hero-tags">
+          <span class="tag tag-red">TOP 10 HOJE</span>
+          <span class="tag tag-green">🇧🇷 DUBLADO</span>
+        </div>
+        <h2 id="heroTitle" class="hero-title">Destaque</h2>
+        <p id="heroDesc" class="hero-desc">Assista agora no Chromecast.</p>
+        <div class="hero-actions">
+          <button class="btn-play" onclick="playHero()">▶ Assistir</button>
+          <button class="btn-info" onclick="infoHero()">ℹ Episódios</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-title">🔥 Séries Populares</div>
+    <div id="homeSeries" class="swimlane"></div>
+
+    <div class="section-title">🎬 Filmes Recomendados</div>
+    <div id="homeMovies" class="swimlane"></div>
+
+    <div class="section-title">📡 Canais Ao Vivo em Destaque</div>
+    <div id="homeChannels" class="swimlane"></div>
+  </div>
+
+  <!-- ABA 1: SÉRIES -->
+  <div id="tab-series" class="view">
+    <input type="text" class="search-box" placeholder="Buscar séries..." oninput="searchCatalog('series', this.value)">
+    <div id="seriesGrid" class="grid"></div>
+  </div>
+
+  <!-- ABA 2: FILMES -->
+  <div id="tab-filmes" class="view">
+    <input type="text" class="search-box" placeholder="Buscar filmes..." oninput="searchCatalog('movie', this.value)">
+    <div id="moviesGrid" class="grid"></div>
+  </div>
+
+  <!-- ABA 3: CANAIS AO VIVO -->
+  <div id="tab-canais" class="view">
+    <input type="text" class="search-box" placeholder="Filtrar canal..." oninput="filterChannels(this.value)">
+    <div id="channelsList"></div>
+  </div>
+
+  <!-- ABA 4: CONTROLE REMOTO -->
+  <div id="tab-controle" class="view">
+    <div class="remote-card">
+      <h3 id="remotePlayingTitle" style="font-size: 15px; margin-bottom: 4px;">Nenhuma mídia ativa</h3>
+      <p id="remotePlayingSub" style="font-size: 12px; color: #888;">Conectado à TV</p>
+      
+      <div class="remote-row">
+        <button class="remote-btn" onclick="sendCmd('SEEK_BACK')" title="Voltar 10s">⏪</button>
+        <button id="remotePlayBtn" class="remote-btn big" onclick="sendCmd('PLAY_PAUSE')">▶</button>
+        <button class="remote-btn" onclick="sendCmd('SEEK_FWD')" title="Avançar 30s">⏩</button>
+      </div>
+
+      <div class="remote-row">
+        <button class="remote-btn" onclick="sendCmd('NEXT_EPISODE')" title="Próximo Episódio">⏭</button>
+        <button class="remote-btn" onclick="sendCmd('STOP')" title="Parar TV">⏹</button>
+      </div>
+
+      <div style="margin-top: 14px; text-align: left;">
+        <label style="font-size: 12px; color: #aaa;">Volume da TV:</label>
+        <input type="range" min="0" max="1" step="0.05" class="vol-slider" id="volSlider" onchange="setVolume(this.value)">
+      </div>
+    </div>
+  </div>
+
+  <!-- MINI PLAYER FLUTUANTE (BOTTOM) -->
+  <div id="miniPlayer" class="mini-player" style="display:none;">
+    <img id="miniPoster" class="mini-poster" src="" alt="">
+    <div class="mini-info" onclick="switchTab('controle')">
+      <div id="miniTitle" class="mini-title">Título</div>
+      <div class="mini-sub">Transmitindo na TV</div>
+    </div>
+    <button class="mini-btn" onclick="sendCmd('PLAY_PAUSE')" id="miniPlayBtn">⏸</button>
+    <button id="miniNextBtn" class="mini-btn red" onclick="sendCmd('NEXT_EPISODE')" title="Próximo Episódio" style="display:none;">⏭</button>
+    <button class="mini-btn" onclick="sendCmd('STOP')">⏹</button>
+  </div>
+
+  <!-- MODAL DE EPISÓDIOS DA SÉRIE -->
+  <div id="seriesModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="modalSeriesTitle" style="font-size:16px;">Série</h3>
+        <button class="modal-close" onclick="closeModal('seriesModal')">&times;</button>
+      </div>
+      <select id="seasonDropdown" class="season-select" onchange="renderEpisodes()"></select>
+      <div id="episodesList"></div>
+    </div>
+  </div>
+
+  <!-- MODAL DE SELEÇÃO DE FONTES -->
+  <div id="streamsModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="modalStreamTitle" style="font-size:15px;">Fontes Disponíveis</h3>
+        <button class="modal-close" onclick="closeModal('streamsModal')">&times;</button>
+      </div>
+      <div id="streamsList"></div>
+    </div>
+  </div>
+
+  <script>
+    let appStatus = {};
+    let allChannels = [];
+    let heroItem = null;
+    let seriesEpisodesData = null;
+    let currentSeriesMeta = null;
+
+    function switchTab(name) {
+      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+      document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('tab-' + name).classList.add('active');
+      event.target && event.target.classList.add('active');
+      window.scrollTo(0,0);
+    }
+
+    function closeModal(id) {
+      document.getElementById(id).style.display = 'none';
+    }
+
+    async function fetchStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        appStatus = data;
+        const dot = document.getElementById('castDot');
+        const txt = document.getElementById('castStatusText');
+        if (data.connected) {
+          dot.classList.add('online');
+          txt.innerText = data.castIp || 'Conectado';
+        } else {
+          dot.classList.remove('online');
+          txt.innerText = 'Desconectado';
+        }
+
+        const mp = document.getElementById('miniPlayer');
+        const nextBtn = document.getElementById('miniNextBtn');
+        const playBtn = document.getElementById('miniPlayBtn');
+        const rPlayBtn = document.getElementById('remotePlayBtn');
+
+        if (data.currentPlayback) {
+          mp.style.display = 'flex';
+          document.getElementById('miniTitle').innerText = data.currentPlayback.title;
+          document.getElementById('miniPoster').src = data.currentPlayback.poster || '';
+          document.getElementById('remotePlayingTitle').innerText = data.currentPlayback.title;
+          document.getElementById('remotePlayingSub').innerText = 'Transmitindo na TV • ' + (data.castIp || '');
+          if (data.currentPlayback.isSeries) {
+            nextBtn.style.display = 'inline-block';
+          } else {
+            nextBtn.style.display = 'none';
+          }
+        } else {
+          mp.style.display = 'none';
+          document.getElementById('remotePlayingTitle').innerText = 'Nenhuma mídia ativa';
+          document.getElementById('remotePlayingSub').innerText = 'Selecione um filme, série ou canal';
+        }
+
+        const isPlaying = data.playerState === 'PLAYING';
+        playBtn.innerText = isPlaying ? '⏸' : '▶';
+        rPlayBtn.innerText = isPlaying ? '⏸' : '▶';
+
+        if (data.volume !== undefined) {
+          document.getElementById('volSlider').value = data.volume;
+        }
+      } catch(e) {}
+    }
+
+    async function loadHome() {
+      try {
+        const sRes = await fetch('/api/catalog?type=series');
+        const sData = await sRes.json();
+        const sMetas = sData.metas || [];
+        if (sMetas.length > 0) {
+          heroItem = sMetas[0];
+          document.getElementById('heroBanner').style.display = 'flex';
+          document.getElementById('heroBanner').style.backgroundImage = 'url(' + (heroItem.background || heroItem.poster) + ')';
+          document.getElementById('heroTitle').innerText = heroItem.name;
+          document.getElementById('heroDesc').innerText = heroItem.description || 'Assista na TV com legendas e áudio dublado.';
+          renderSwimlane('homeSeries', sMetas, 'series');
+        }
+
+        const mRes = await fetch('/api/catalog?type=movie');
+        const mData = await mRes.json();
+        renderSwimlane('homeMovies', mData.metas || [], 'movie');
+
+        const chRes = await fetch('/api/channels');
+        const chData = await chRes.json();
+        allChannels = chData.channels || [];
+        renderHomeChannels(allChannels.slice(0, 10));
+        renderChannels(allChannels);
+      } catch(e) {}
+    }
+
+    function renderSwimlane(elemId, list, type) {
+      const container = document.getElementById(elemId);
+      container.innerHTML = list.slice(0, 12).map(item => `
+        <div class="movie-card" onclick="openMedia('${type}', '${item.id}', '${escape(item.name)}', '${item.poster || ''}')">
+          <div class="poster-wrap">
+            <img class="poster-img" src="${item.poster || ''}" loading="lazy" onerror="this.src='https://placehold.co/105x150/141722/white?text=Capa'">
+          </div>
+          <div class="card-title">${item.name}</div>
+        </div>
+      `).join('');
+    }
+
+    function renderHomeChannels(channels) {
+      const c = document.getElementById('homeChannels');
+      c.innerHTML = channels.map(ch => `
+        <div class="movie-card" onclick="playChannel('${escape(ch.url)}', '${escape(ch.name)}', '${ch.logo || ''}')">
+          <div class="poster-wrap" style="height:100px; display:flex; align-items:center; justify-content:center; padding:8px;">
+            <img src="${ch.logo || ''}" style="max-width:80%; max-height:80px; object-fit:contain;" onerror="this.src='https://placehold.co/80x80/141722/white?text=TV'">
+          </div>
+          <div class="card-title">${ch.name}</div>
+        </div>
+      `).join('');
+    }
+
+    async function searchCatalog(type, query) {
+      const res = await fetch(`/api/catalog?type=${type}&search=${encodeURIComponent(query)}`);
+      const data = await res.json();
+      const list = data.metas || [];
+      const gridId = type === 'series' ? 'seriesGrid' : 'moviesGrid';
+      document.getElementById(gridId).innerHTML = list.map(item => `
+        <div class="movie-card" onclick="openMedia('${type}', '${item.id}', '${escape(item.name)}', '${item.poster || ''}')">
+          <div class="poster-wrap">
+            <img class="poster-img" src="${item.poster || ''}" loading="lazy" onerror="this.src='https://placehold.co/105x150/141722/white?text=Capa'">
+          </div>
+          <div class="card-title">${item.name}</div>
+        </div>
+      `).join('');
+    }
+
+    function renderChannels(list) {
+      const c = document.getElementById('channelsList');
+      c.innerHTML = list.map(ch => `
+        <div class="channel-item">
+          <div class="ch-info">
+            <img class="ch-logo" src="${ch.logo || ''}" onerror="this.src='https://placehold.co/40x40/0A0C10/white?text=TV'">
+            <div>
+              <div class="ch-name">${ch.name}</div>
+              <div class="ch-group">${ch.group}</div>
+            </div>
+          </div>
+          <button class="btn-cast" onclick="playChannel('${escape(ch.url)}', '${escape(ch.name)}', '${ch.logo || ''}')">▶ TV</button>
+        </div>
+      `).join('');
+    }
+
+    function filterChannels(q) {
+      const filtered = allChannels.filter(c => c.name.toLowerCase().includes(q.toLowerCase()) || c.group.toLowerCase().includes(q.toLowerCase()));
+      renderChannels(filtered);
+    }
+
+    async function openMedia(type, id, title, poster) {
+      title = unescape(title);
+      if (type === 'series') {
+        currentSeriesMeta = { id, title, poster };
+        document.getElementById('modalSeriesTitle').innerText = title;
+        document.getElementById('seriesModal').style.display = 'block';
+        document.getElementById('episodesList').innerHTML = '<div style="text-align:center; padding:20px; color:#aaa;">Carregando episódios...</div>';
+        
+        const res = await fetch(`/api/series?id=${encodeURIComponent(id)}`);
+        seriesEpisodesData = await res.json();
+        
+        const select = document.getElementById('seasonDropdown');
+        const seasons = Object.keys(seriesEpisodesData.seasons || {}).sort((a,b) => parseInt(a)-parseInt(b));
+        select.innerHTML = seasons.map(s => `<option value="${s}">Temporada ${s}</option>`).join('');
+        renderEpisodes();
+      } else {
+        openStreams(type, id, title, poster);
+      }
+    }
+
+    function renderEpisodes() {
+      if (!seriesEpisodesData || !currentSeriesMeta) return;
+      const s = document.getElementById('seasonDropdown').value;
+      const episodes = seriesEpisodesData.seasons[s] || [];
+      const el = document.getElementById('episodesList');
+      el.innerHTML = episodes.map(ep => `
+        <div class="ep-item">
+          <img class="ep-thumb" src="${ep.thumbnail || currentSeriesMeta.poster}" onerror="this.src='${currentSeriesMeta.poster}'">
+          <div class="ep-info">
+            <div class="ep-title">E${ep.episode} • ${ep.name || 'Episódio'}</div>
+            <div class="ep-desc">${ep.overview || ''}</div>
+          </div>
+          <button class="btn-cast" onclick="openStreams('series', '${ep.id}', '${escape(currentSeriesMeta.title + ' - T' + s + 'E' + ep.episode + ': ' + ep.name)}', '${currentSeriesMeta.poster}', {seriesId:'${currentSeriesMeta.id}', seriesTitle:'${escape(currentSeriesMeta.title)}', season:${s}, episode:${ep.episode}, allEpisodes:seriesEpisodesData.all})">▶</button>
+        </div>
+      `).join('');
+    }
+
+    async function openStreams(type, id, title, poster, seriesContext) {
+      title = unescape(title);
+      closeModal('seriesModal');
+      document.getElementById('modalStreamTitle').innerText = title;
+      document.getElementById('streamsModal').style.display = 'block';
+      document.getElementById('streamsList').innerHTML = '<div style="text-align:center; padding:20px; color:#aaa;">Buscando melhores fontes dubladas e legendadas...</div>';
+
+      const res = await fetch(`/api/streams?type=${type}&id=${encodeURIComponent(id)}`);
+      const data = await res.json();
+      const streams = data.streams || [];
+      const subs = data.subtitles || [];
+      const defaultSub = subs.length > 0 ? subs[0].url : '';
+
+      if (streams.length === 0) {
+        document.getElementById('streamsList').innerHTML = '<div style="text-align:center; padding:20px; color:#aaa;">Nenhuma fonte encontrada nos add-ons.</div>';
+        return;
+      }
+
+      document.getElementById('streamsList').innerHTML = streams.map(st => `
+        <div class="channel-item">
+          <div style="flex:1; overflow:hidden;">
+            <div style="font-weight:bold; font-size:13px; display:flex; align-items:center; gap:6px;">
+              ${st.isPtBr ? '<span class="tag tag-green">🇧🇷 DUBLADO</span>' : ''}
+              <span>${st.addon}</span>
+            </div>
+            <div style="font-size:11px; color:#aaa; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${st.title}</div>
+          </div>
+          <button class="btn-cast" onclick="playMedia('${escape(st.url)}', '${escape(title)}', '${poster}', '${escape(defaultSub)}', ${seriesContext ? JSON.stringify(seriesContext) : 'null'})">Assistir na TV</button>
+        </div>
+      `).join('');
+    }
+
+    async function playMedia(url, title, poster, subUrl, seriesContext) {
+      url = unescape(url);
+      title = unescape(title);
+      subUrl = unescape(subUrl);
+      closeModal('streamsModal');
+      await fetch('/api/play', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, title, poster, subtitleUrl: subUrl, seriesContext })
+      });
+      fetchStatus();
+      switchTab('controle');
+    }
+
+    async function playChannel(url, name, logo) {
+      await fetch('/api/play', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: unescape(url), title: unescape(name), poster: logo, type: 'channel' })
+      });
+      fetchStatus();
+      switchTab('controle');
+    }
+
+    function playHero() {
+      if (heroItem) openMedia(heroItem.type, heroItem.id, escape(heroItem.name), heroItem.poster);
+    }
+    function infoHero() {
+      if (heroItem) openMedia(heroItem.type, heroItem.id, escape(heroItem.name), heroItem.poster);
+    }
+
+    async function sendCmd(type) {
+      await fetch('/api/cmd', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type })
+      });
+      fetchStatus();
+    }
+
+    async function setVolume(vol) {
+      await fetch('/api/volume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ volume: parseFloat(vol) })
+      });
+    }
+
+    loadHome();
+    searchCatalog('series', '');
+    searchCatalog('movie', '');
+    fetchStatus();
+    setInterval(fetchStatus, 3000);
+  </script>
+</body>
+</html>
+''';
 }
 
 // ============================================================================
@@ -487,6 +1515,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   late CastV2Client _cast;
   final LocalSubtitleServer _subServer = LocalSubtitleServer();
+  LocalWebRemoteServer? _webServer;
+  String _localLanIp = '192.168.101.5';
+
   String _status = 'Pronto! Conecte à TV ou selecione um conteúdo.';
   double _volume = 0.8;
   int _currentNavIndex = 0; // 0: Início, 1: Séries, 2: Filmes, 3: TV Ao Vivo, 4: Gerenciador
@@ -531,20 +1562,120 @@ class _HomeScreenState extends State<HomeScreen> {
       onMediaStatusUpdate: _handleMediaStatusUpdate,
     );
     _subServer.ensureStarted();
+    _detectLocalIp();
     _initDefaultChannels();
     _loadSavedData();
     _loadAddons();
     _fetchNetflixDashboard();
+    _initWebServer();
   }
 
   @override
   void dispose() {
+    _webServer?.stop();
     _autoPlayCountdownTimer?.cancel();
     _ipCtrl.dispose();
     _searchCtrl.dispose();
     _m3uUrlCtrl.dispose();
     _addonUrlCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _detectLocalIp() async {
+    try {
+      final interfaces = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLinkLocal: false,
+      );
+      for (final iface in interfaces) {
+        for (final addr in iface.addresses) {
+          if (!addr.isLoopback && addr.address.startsWith('192.168.')) {
+            setState(() => _localLanIp = addr.address);
+            return;
+          }
+        }
+      }
+      for (final iface in interfaces) {
+        for (final addr in iface.addresses) {
+          if (!addr.isLoopback) {
+            setState(() => _localLanIp = addr.address);
+            return;
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  void _initWebServer() {
+    _webServer = LocalWebRemoteServer(
+      getChannels: () => _allChannels,
+      getHealthMap: () => _healthMap,
+      getAddons: () => _stremioAddons,
+      getCurrentPlayback: () => _currentPlayback,
+      getPlayerState: () => _cast.playerState,
+      getVolume: () => _volume,
+      getCastIp: () => _ipCtrl.text,
+      onPlayMedia: ({required url, required title, poster = '', subtitleUrl, seriesContext}) async {
+        String? hostedVtt;
+        if (subtitleUrl != null && subtitleUrl.isNotEmpty) {
+          try {
+            if (!_cast.isConnected) await _cast.connect(_ipCtrl.text);
+            hostedVtt = await _subServer.hostSubtitleFromUrl(subtitleUrl, _cast.localLanIp);
+          } catch (_) {}
+        }
+        await _cast.loadMedia(
+          _ipCtrl.text,
+          url,
+          title,
+          poster: poster,
+          vttSubtitleUrl: hostedVtt,
+        );
+        if (mounted) {
+          setState(() {
+            _currentPlayback = ActivePlaybackContext(
+              type: seriesContext != null ? 'series' : 'movie',
+              title: title,
+              poster: poster,
+              streamUrl: url,
+              seriesId: seriesContext?['seriesId'],
+              seriesTitle: seriesContext?['seriesTitle'],
+              season: (seriesContext?['season'] as num?)?.toInt(),
+              episode: (seriesContext?['episode'] as num?)?.toInt(),
+              allEpisodes: (seriesContext?['allEpisodes'] as List<dynamic>?)?.map((e) => Map<String, dynamic>.from(e)).toList() ?? [],
+              vttSubtitleUrl: hostedVtt,
+            );
+          });
+        }
+      },
+      onMediaCmd: (cmd) async {
+        if (cmd == 'PLAY_PAUSE') {
+          if (_cast.playerState == 'PLAYING') {
+            _cast.sendMediaCmd('PAUSE');
+          } else {
+            _cast.sendMediaCmd('PLAY');
+          }
+        } else if (cmd == 'NEXT_EPISODE') {
+          await _skipToNextEpisode();
+        } else if (cmd == 'SEEK_BACK') {
+          _cast.sendMediaCmd('SEEK');
+        } else if (cmd == 'SEEK_FWD') {
+          _cast.sendMediaCmd('SEEK');
+        } else if (cmd == 'STOP') {
+          _cast.sendMediaCmd('STOP');
+          if (mounted) setState(() => _currentPlayback = null);
+        } else {
+          _cast.sendMediaCmd(cmd);
+        }
+      },
+      onSetVolume: (vol) async {
+        setState(() => _volume = vol);
+        _cast.setVolume(vol);
+      },
+      onTestChannels: (channels) async {
+        await _startBatchChannelCheck(channels);
+      },
+    );
+    _webServer!.start(port: 8080);
   }
 
   // Lista padrão verificada do Brasil
@@ -1717,6 +2848,31 @@ class _HomeScreenState extends State<HomeScreen> {
               style: TextStyle(fontWeight: FontWeight.w300, letterSpacing: 2, fontSize: 14, color: Colors.white70),
             ),
             const Spacer(),
+            // Botão Acesso iPhone / Celular
+            InkWell(
+              onTap: _showIphoneAccessDialog,
+              borderRadius: BorderRadius.circular(20),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                margin: const EdgeInsets.only(right: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF141722),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: const Color(0xFFE50914).withOpacity(0.6)),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.phone_iphone, size: 16, color: Color(0xFFE50914)),
+                    SizedBox(width: 4),
+                    Text(
+                      '📱 iPhone / Web',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                  ],
+                ),
+              ),
+            ),
             // Chip de Conexão Chromecast
             InkWell(
               onTap: _showChromecastConnectDialog,
@@ -2401,6 +3557,48 @@ class _HomeScreenState extends State<HomeScreen> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        // Card de Acesso do iPhone
+        Card(
+          color: const Color(0xFF1A1D2B),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                const Icon(Icons.phone_iphone, size: 40, color: Color(0xFFE50914)),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Acesso pelo iPhone / Celular (Safari)',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'http://$_localLanIp:${_webServer?.port ?? 8080}',
+                        style: const TextStyle(color: Color(0xFF10B981), fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Abra no Safari do iPhone para navegar e controlar na TV.',
+                        style: TextStyle(fontSize: 12, color: Colors.white70),
+                      ),
+                    ],
+                  ),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE50914)),
+                  onPressed: _showIphoneAccessDialog,
+                  child: const Text('Ver QR Code'),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        const SizedBox(height: 16),
+
         // 1. Configurações de Reprodução & Autoplay de Séries
         const Text('1. Reprodução & Continuidade de Séries', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
@@ -2622,6 +3820,83 @@ class _HomeScreenState extends State<HomeScreen> {
               _cast.sendMediaCmd('STOP');
               setState(() => _currentPlayback = null);
             },
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showIphoneAccessDialog() {
+    final port = _webServer?.port ?? 8080;
+    final webUrl = 'http://$_localLanIp:$port';
+    final qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${Uri.encodeComponent(webUrl)}';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF141722),
+        title: const Row(
+          children: [
+            Icon(Icons.phone_iphone, color: Color(0xFFE50914)),
+            SizedBox(width: 8),
+            Text('Acesso pelo iPhone / Celular', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Aponte a câmera do iPhone para conectar instantaneamente:',
+              style: TextStyle(fontSize: 13, color: Colors.white70),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10)),
+              child: Image.network(
+                qrUrl,
+                width: 180,
+                height: 180,
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const Icon(Icons.qr_code, size: 120, color: Colors.black),
+              ),
+            ),
+            const SizedBox(height: 14),
+            const Text('Ou abra o Safari e digite o endereço:', style: TextStyle(fontSize: 12, color: Colors.white54)),
+            const SizedBox(height: 4),
+            SelectableText(
+              webUrl,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF10B981)),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0A0C10),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.white12),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.tips_and_updates, color: Colors.amber, size: 20),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'No Safari, toque no botão Compartilhar e selecione "Adicionar à Tela de Início" para virar um app nativo!',
+                      style: TextStyle(fontSize: 11, color: Colors.white70),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE50914)),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Entendi'),
           ),
         ],
       ),

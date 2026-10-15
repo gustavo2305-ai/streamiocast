@@ -1,7 +1,7 @@
 name: streamiocast
-description: Controle Chromecast 2015 + Series/Temporadas + Autoplay + Dashboard Netflix + Canais & Extensoes.
+description: Controle Chromecast 2015 + Series/Temporadas + Autoplay + Dashboard Netflix + Web Remote iPhone PWA.
 publish_to: 'none'
-version: 2.1.0+3
+version: 2.2.0+4
 
 environment:
   sdk: '>=3.2.0 <4.0.0'
